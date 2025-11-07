@@ -4,6 +4,7 @@ huggingface_hub
 einops
 safetensors
 
+rerun-sdk==0.23.4
 numba==0.61.2
 
 onnxruntime
