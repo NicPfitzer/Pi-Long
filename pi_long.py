@@ -1,5 +1,6 @@
 import numpy as np
 import argparse
+import json
 
 import os
 import glob
@@ -9,6 +10,7 @@ from tqdm.auto import tqdm
 import cv2
 
 import gc
+from pathlib import Path
 
 try:
     import onnxruntime
@@ -37,6 +39,18 @@ import matplotlib.pyplot as plt
 import sys
 
 from loop_utils.config_utils import load_config
+from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
+from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+
+from grounded_sam2_vggt_pointcloud import (
+    aggregate_point_clouds,
+    determine_seg_device,
+    label_to_color,
+    run_grounded_sam2_on_frame,
+    save_ply_ascii,
+    subsample_points,
+)
 
 def remove_duplicates(data_list):
     """
@@ -92,6 +106,13 @@ class Pi_Long:
         os.makedirs(self.result_aligned_dir, exist_ok=True)
         os.makedirs(self.result_loop_dir, exist_ok=True)
         os.makedirs(self.pcd_dir, exist_ok=True)
+
+        self.seg_cfg = self.config.get('Segmentation', {})
+        self.segmentation_enabled = bool(self.seg_cfg.get('enable', False))
+        self.segmentation_output_dir = os.path.join(self.output_dir, 'segmentation')
+        self.segmentation_models = None
+        if self.segmentation_enabled:
+            self._validate_segmentation_config()
         
         self.all_camera_poses = []
         
@@ -416,6 +437,9 @@ class Pi_Long:
             )
 
         self.save_camera_poses()
+
+        if self.segmentation_enabled:
+            self.run_segmentation_pipeline()
         
         print('Done.')
 
@@ -513,6 +537,182 @@ class Pi_Long:
                 f.write(f'{position[0]} {position[1]} {position[2]} {color[0]} {color[1]} {color[2]}\n')
         
         print(f"Camera poses visualization saved to {ply_path}")
+
+    def _validate_segmentation_config(self):
+        required = ["prompt", "sam2_checkpoint", "sam2_config", "grounding_dino_model_id"]
+        missing = [key for key in required if not self.seg_cfg.get(key)]
+        if missing:
+            raise ValueError(f"[Segmentation] Missing required config keys: {missing}")
+
+    def _get_segmentation_models(self):
+        if self.segmentation_models is not None:
+            return self.segmentation_models
+
+        seg_device = determine_seg_device(self.seg_cfg.get('device'))
+        print(f"[Segmentation] Loading Grounded SAM 2 components on {seg_device}...")
+        sam2_model = build_sam2(self.seg_cfg['sam2_config'], self.seg_cfg['sam2_checkpoint'], device=str(seg_device))
+        predictor = SAM2ImagePredictor(sam2_model)
+        dino_kwargs = {"trust_remote_code": True}
+        processor = AutoProcessor.from_pretrained(self.seg_cfg['grounding_dino_model_id'], **dino_kwargs)
+        grounding_model = AutoModelForZeroShotObjectDetection.from_pretrained(
+            self.seg_cfg['grounding_dino_model_id'], **dino_kwargs
+        ).to(seg_device)
+        grounding_model.eval()
+        self.segmentation_models = (predictor, grounding_model, processor, seg_device)
+        return self.segmentation_models
+
+    def _unique_chunk_start(self, chunk_idx):
+        if chunk_idx == 0:
+            return 0
+        chunk_start, chunk_end = self.chunk_indices[chunk_idx]
+        return min(self.overlap, chunk_end - chunk_start)
+
+    def _prepare_segmentation_dirs(self):
+        base_dir = Path(self.segmentation_output_dir)
+        per_label_dir = base_dir / "per_label"
+        per_label_dir.mkdir(parents=True, exist_ok=True)
+        return base_dir, per_label_dir
+
+    @staticmethod
+    def _prepare_conf_map(conf_array):
+        if conf_array is None:
+            return None
+        conf_np = np.asarray(conf_array)
+        if conf_np.ndim == 4 and conf_np.shape[-1] == 1:
+            conf_np = np.squeeze(conf_np, axis=-1)
+        return conf_np
+
+    def run_segmentation_pipeline(self):
+        prompt = self.seg_cfg.get('prompt')
+        if not prompt:
+            print("[Segmentation] Prompt not provided; skipping segmentation.")
+            return
+
+        try:
+            predictor, grounding_model, processor, seg_device = self._get_segmentation_models()
+        except Exception as exc:
+            print(f"[Segmentation] Failed to initialize models: {exc}")
+            return
+
+        base_dir, per_label_dir = self._prepare_segmentation_dirs()
+        per_label_points = {}
+        per_label_stats = {}
+        total_frames = 0
+        max_points_per_label = int(self.seg_cfg.get('max_points_per_label', 150_000))
+        print("[Segmentation] Starting Grounded SAM 2 over aligned chunks...")
+
+        for chunk_idx, (chunk_start, chunk_end) in enumerate(self.chunk_indices):
+            chunk_file = Path(self.result_aligned_dir) / f"chunk_{chunk_idx}.npy"
+            if not chunk_file.exists():
+                print(f"[Segmentation] Missing aligned chunk {chunk_file}, skipping.")
+                continue
+            chunk_data = np.load(chunk_file, allow_pickle=True).item()
+            chunk_points = chunk_data.get('points')
+            chunk_conf = chunk_data.get('conf')
+            chunk_images = chunk_data.get('images')
+            if chunk_points is None or chunk_conf is None or chunk_images is None:
+                print(f"[Segmentation] Chunk {chunk_idx} lacks required tensors; skipping.")
+                continue
+
+            unique_start = self._unique_chunk_start(chunk_idx)
+            chunk_len = chunk_points.shape[0]
+            if unique_start >= chunk_len:
+                continue
+
+            frame_paths = [
+                Path(p) for p in self.img_list[chunk_start + unique_start:chunk_end]
+            ]
+            if not frame_paths:
+                continue
+
+            points_slice = np.asarray(chunk_points[unique_start:])
+            conf_slice = self._prepare_conf_map(chunk_conf[unique_start:])
+            target_h, target_w = chunk_images.shape[2], chunk_images.shape[3]
+            segments_per_frame = []
+
+            for frame_path in frame_paths:
+                segs = run_grounded_sam2_on_frame(
+                    frame_path=frame_path,
+                    prompt=prompt,
+                    predictor=predictor,
+                    grounding_model=grounding_model,
+                    device=seg_device,
+                    box_threshold=self.seg_cfg.get('box_threshold', 0.35),
+                    text_threshold=self.seg_cfg.get('text_threshold', 0.25),
+                    box_shrink_ratio=self.seg_cfg.get('box_shrink_ratio', 1.0),
+                    morph_kernel=self.seg_cfg.get('morph_kernel', 3),
+                    target_size=(target_h, target_w),
+                    processor=processor,
+                    debug=self.seg_cfg.get('debug', False),
+                )
+                segments_per_frame.append(segs)
+
+            label_points, label_stats = aggregate_point_clouds(
+                frame_paths=frame_paths,
+                segments_per_frame=segments_per_frame,
+                depth_conf=conf_slice,
+                depth_conf_threshold=self.seg_cfg.get('confidence_threshold'),
+                min_mask_area=self.seg_cfg.get('min_mask_area', 200),
+                max_points_per_label=max_points_per_label,
+                world_points=points_slice,
+                frame_offset=chunk_start + unique_start,
+            )
+
+            for label, pts in label_points.items():
+                per_label_points.setdefault(label, []).append(pts)
+                src_stats = label_stats.get(label, {})
+                dst_stats = per_label_stats.setdefault(
+                    label, {"mask_pixels": 0.0, "instances": 0.0, "unique_frames": 0.0}
+                )
+                dst_stats["mask_pixels"] += src_stats.get("mask_pixels", 0.0)
+                dst_stats["instances"] += src_stats.get("instances", 0.0)
+                dst_stats["unique_frames"] += src_stats.get("unique_frames", 0.0)
+
+            total_frames += len(frame_paths)
+            print(f"[Segmentation] Chunk {chunk_idx}: processed {len(frame_paths)} frames, labels found: {list(label_points.keys())}")
+
+        if not per_label_points:
+            print("[Segmentation] No segmented points were produced. Check prompts or thresholds.")
+            return
+
+        merged_points = []
+        merged_colors = []
+        metadata = {}
+
+        for label, point_lists in per_label_points.items():
+            concatenated = np.concatenate(point_lists, axis=0)
+            if max_points_per_label > 0 and len(concatenated) > max_points_per_label:
+                concatenated = subsample_points(concatenated, max_points_per_label)
+            color = label_to_color(label)
+            colors = np.repeat(color[None, :], len(concatenated), axis=0)
+            label_filename = f"{label.replace(' ', '_')}.ply"
+            save_ply_ascii(per_label_dir / label_filename, concatenated, colors)
+            merged_points.append(concatenated)
+            merged_colors.append(colors)
+            stats = per_label_stats.get(label, {})
+            metadata[label] = {
+                "points": len(concatenated),
+                "mask_pixels": float(stats.get("mask_pixels", 0.0)),
+                "unique_frames": float(stats.get("unique_frames", 0.0)),
+                "instances": float(stats.get("instances", 0.0)),
+            }
+            print(f"[Segmentation] Saved {len(concatenated)} points for label '{label}' to {label_filename}")
+
+        if merged_points and not self.seg_cfg.get('no_merged_cloud', False):
+            all_points = np.concatenate(merged_points, axis=0)
+            all_colors = np.concatenate(merged_colors, axis=0)
+            save_ply_ascii(base_dir / "merged_point_cloud.ply", all_points, all_colors)
+            print(f"[Segmentation] Merged point cloud written to {(base_dir / 'merged_point_cloud.ply')}")
+
+        metadata_path = base_dir / "metadata.json"
+        with metadata_path.open("w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2)
+        print(f"[Segmentation] Metadata saved to {metadata_path}")
+        print(f"[Segmentation] Completed segmentation over {total_frames} unique frames.")
+
+        # Free segmentation models to release GPU memory
+        self.segmentation_models = None
+        torch.cuda.empty_cache()
     
     def close(self):
         '''
