@@ -273,6 +273,7 @@ class SegmentationManager:
             return
         spacing_cfg = wire_cfg.get("spacing_factor", 2.5)
         spacing_factor = float(spacing_cfg) if spacing_cfg is not None else None
+        reconstruction_up = self._load_reconstruction_up_vector()
         try:
             wire_result = fit_electric_pole_wires(
                 instance_root=base_dir / "instances",
@@ -282,6 +283,7 @@ class SegmentationManager:
                 samples_per_segment=int(wire_cfg.get("samples_per_segment", 32)),
                 sag_fraction=float(wire_cfg.get("sag_fraction", 0.025)),
                 spacing_factor=spacing_factor,
+                global_up=reconstruction_up,
             )
         except Exception as exc:
             print(f"[Segmentation] Wire fitting failed: {exc}")
@@ -299,3 +301,42 @@ class SegmentationManager:
         self.segmentation_models = None
         torch.cuda.empty_cache()
 
+    def _load_reconstruction_up_vector(self) -> Optional[np.ndarray]:
+        """Load and consolidate chunk-level up vectors saved during reconstruction."""
+        up_path = Path(self.output_dir) / "chunk_up_directions.json"
+        if not up_path.exists():
+            return None
+        try:
+            records = json.loads(up_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[Segmentation] Failed to parse {up_path}: {exc}")
+            return None
+        vectors: List[np.ndarray] = []
+        weights: List[float] = []
+        for record in records:
+            vec = record.get("up")
+            if vec is None:
+                continue
+            arr = np.asarray(vec, dtype=np.float32)
+            if arr.shape != (3,):
+                continue
+            norm = np.linalg.norm(arr)
+            if norm < 1e-6:
+                continue
+            vectors.append(arr / norm)
+            weight = float(record.get("inliers") or 0.0)
+            if weight <= 0:
+                weight = 1.0 if record.get("success") else 0.0
+            weights.append(weight)
+        if not vectors:
+            return None
+        weights_arr = np.asarray(weights, dtype=np.float32)
+        if not np.any(weights_arr > 0):
+            weights_arr = np.ones(len(vectors), dtype=np.float32)
+        combined = np.average(np.stack(vectors, axis=0), axis=0, weights=weights_arr)
+        norm = np.linalg.norm(combined)
+        if norm < 1e-6:
+            return None
+        up_vector = combined / norm
+        print(f"[Segmentation] Using reconstruction up vector {up_vector.tolist()} for wire fitting.")
+        return up_vector

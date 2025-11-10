@@ -22,6 +22,20 @@ Model:
     sample_ratio: 0.015
     conf_threshold_coef: 0.65 # conf_threshold = np.mean(confs) * conf_threshold_coef
 
+  FloorDetector:
+    enable: True
+    max_points: 120000
+    max_iterations: 600
+    distance_threshold: 0.08
+    min_inlier_ratio: 0.02
+    min_inliers: 2000
+    min_candidate_points: 5000
+    confidence_coef: 0.4
+    alignment_weight: 0.2
+    early_stop_ratio: 0.75
+    fallback_up: [0.0, 1.0, 0.0]
+    max_refine_points: 300000
+
 Loop:
   DBoW:
     thresh: 0.034

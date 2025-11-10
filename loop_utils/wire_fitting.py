@@ -24,6 +24,7 @@ class PoleInstance:
     local_max: np.ndarray
     extents: np.ndarray
     height_axis: int
+    world_up: Optional[np.ndarray] = None
 
     @property
     def height(self) -> float:
@@ -91,6 +92,20 @@ def _mad_mask(values: np.ndarray, z_thresh: float) -> np.ndarray:
     return np.abs(modified_z) <= z_thresh
 
 
+def _normalize_vector(vector: Optional[Sequence[float]]) -> Optional[np.ndarray]:
+    if vector is None:
+        return None
+    arr = np.asarray(vector, dtype=np.float32).reshape(-1)
+    if arr.size != 3:
+        logger.warning("Ignoring malformed up vector with shape %s", arr.shape)
+        return None
+    norm = np.linalg.norm(arr)
+    if norm < 1e-6:
+        logger.warning("Ignoring near-zero up vector %s", arr.tolist())
+        return None
+    return arr / norm
+
+
 def _compute_oriented_bbox(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     centroid = points.mean(axis=0).astype(np.float32)
     centered = points - centroid
@@ -115,7 +130,12 @@ def _save_bbox_mesh(path: Path, corners: np.ndarray, color: Sequence[int]) -> No
     save_ply_ascii(path, corners, colors)
 
 
-def _load_poles(instance_dir: Path, min_points: int, bbox_color: Sequence[int]) -> List[PoleInstance]:
+def _load_poles(
+    instance_dir: Path,
+    min_points: int,
+    bbox_color: Sequence[int],
+    preferred_up: Optional[np.ndarray] = None,
+) -> List[PoleInstance]:
     poles: List[PoleInstance] = []
     skipped = 0
     for ply_path in sorted(instance_dir.glob("*.ply")):
@@ -142,6 +162,7 @@ def _load_poles(instance_dir: Path, min_points: int, bbox_color: Sequence[int]) 
             local_max=local_max,
             extents=extents,
             height_axis=height_axis,
+            world_up=preferred_up.copy() if preferred_up is not None else None,
         )
         bbox_path = ply_path.with_name(f"{ply_path.stem}_bbox.ply")
         _save_bbox_mesh(bbox_path, pole.all_corners(), bbox_color)
@@ -247,6 +268,8 @@ def _connect_poles(
 
 
 def _pole_up_direction(pole: PoleInstance) -> np.ndarray:
+    if pole.world_up is not None:
+        return pole.world_up
     axis = pole.axes[:, pole.height_axis].astype(np.float32)
     if axis[2] < 0:
         axis = -axis
@@ -391,19 +414,28 @@ def fit_electric_pole_wires(
     spacing_factor: Optional[float] = 2.5,
     wire_color: Sequence[int] = (90, 90, 90),
     bbox_color: Sequence[int] = (255, 85, 0),
+    global_up: Optional[Sequence[float]] = None,
 ) -> Optional[WireFittingResult]:
     logger.info(
         "Starting wire fitting for label='%s' (root=%s)",
         label_name,
         instance_root,
     )
+    normalized_up = _normalize_vector(global_up)
+    if normalized_up is not None:
+        logger.info("Using provided global up vector %s", np.array2string(normalized_up, precision=3))
     label_slug = label_name.replace(" ", "_")
     label_dir = instance_root / label_slug
     if not label_dir.exists():
         logger.warning("Label directory %s does not exist; skipping", label_dir)
         return None
 
-    poles = _load_poles(label_dir, min_points=min_points, bbox_color=bbox_color)
+    poles = _load_poles(
+        label_dir,
+        min_points=min_points,
+        bbox_color=bbox_color,
+        preferred_up=normalized_up,
+    )
     if len(poles) < 2:
         logger.warning(
             "Need at least two poles to fit wires; got %d in %s",
@@ -443,6 +475,8 @@ def fit_electric_pole_wires(
         "wire_points": int(points.shape[0]),
         "connections": wire_meta,
         "heuristic_suggestions": SUGGESTED_HEURISTICS,
+        "global_up_vector": normalized_up.tolist() if normalized_up is not None else None,
+        "global_up_source": "reconstruction_chunks" if normalized_up is not None else "pole_bbox_principal_axis",
     }
     metadata_path = label_dir / f"{label_slug}_wires.json"
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")

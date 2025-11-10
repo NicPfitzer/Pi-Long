@@ -1,5 +1,6 @@
 import os
 import glob
+import json
 import torch
 from tqdm.auto import tqdm
 import cv2
@@ -21,6 +22,7 @@ from pi3.utils.geometry import depth_edge
 
 import numpy as np
 
+from loop_utils.floor_detection import FloorDetectorConfig, estimate_floor_up_direction
 from loop_utils.sim3loop import Sim3LoopOptimizer
 from loop_utils.sim3utils import *
 
@@ -96,6 +98,10 @@ class Pi_Long:
         self.segmentation.validate_config()
         
         self.all_camera_poses = []
+        floor_cfg = self.config['Model'].get('FloorDetector', {})
+        self.floor_detector_cfg = FloorDetectorConfig.from_mapping(floor_cfg)
+        self.prev_up_direction = self.floor_detector_cfg.fallback_up_array.copy()
+        self.chunk_up_records = []
         
         self.delete_temp_files = self.config['Model']['delete_temp_files']
 
@@ -203,6 +209,47 @@ class Pi_Long:
         for key in predictions.keys():
             if isinstance(predictions[key], torch.Tensor):
                 predictions[key] = predictions[key].cpu().numpy().squeeze(0)
+
+        if (
+            self.floor_detector_cfg.enable
+            and not is_loop
+            and range_2 is None
+            and 'points' in predictions
+        ):
+            floor_up, floor_meta = estimate_floor_up_direction(
+                predictions['points'],
+                predictions.get('conf'),
+                cfg=self.floor_detector_cfg,
+                prev_up=self.prev_up_direction,
+            )
+            if floor_up is None:
+                fallback_reason = 'previous_chunk' if self.chunk_up_records else 'default_fallback'
+                up_vector = self.prev_up_direction.copy()
+                floor_meta.update({
+                    'used_fallback': True,
+                    'fallback_reason': fallback_reason,
+                })
+            else:
+                up_vector = floor_up
+                self.prev_up_direction = up_vector
+                floor_meta['used_fallback'] = False
+                floor_meta['fallback_reason'] = None
+
+            predictions['global_up'] = up_vector.astype(np.float32)
+            predictions['floor_detector'] = floor_meta
+
+            self.chunk_up_records.append(
+                {
+                    'chunk_idx': chunk_idx,
+                    'up': up_vector.tolist(),
+                    'success': bool(floor_meta.get('success', False)),
+                    'inliers': int(floor_meta.get('inliers', 0)),
+                    'candidate_points': int(floor_meta.get('candidate_points', 0)),
+                    'iterations': int(floor_meta.get('iterations', 0)),
+                    'used_fallback': bool(floor_meta.get('used_fallback', False)),
+                    'reason': floor_meta.get('reason'),
+                }
+            )
         
         # Save predictions to disk instead of keeping in memory
         if is_loop:
@@ -394,6 +441,13 @@ class Pi_Long:
             chunk_data = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx+1}.npy"), allow_pickle=True).item()
             
             chunk_data['points'] = apply_sim3_direct(chunk_data['points'], s, R, t)
+            if 'global_up' in chunk_data:
+                up_vec = np.asarray(chunk_data['global_up'], dtype=np.float32)
+                rotated = R @ up_vec
+                norm = np.linalg.norm(rotated)
+                if norm > 1e-6:
+                    rotated = rotated / norm
+                chunk_data['global_up'] = rotated.astype(np.float32)
             
             aligned_path = os.path.join(self.result_aligned_dir, f"chunk_{chunk_idx+1}.npy")
             np.save(aligned_path, chunk_data)
@@ -420,6 +474,8 @@ class Pi_Long:
         self.save_camera_poses()
 
         self.segmentation.run(self.img_list, self.chunk_indices)
+
+        self.save_chunk_up_directions()
         
         print('Done.')
 
@@ -517,6 +573,14 @@ class Pi_Long:
                 f.write(f'{position[0]} {position[1]} {position[2]} {color[0]} {color[1]} {color[2]}\n')
         
         print(f"Camera poses visualization saved to {ply_path}")
+
+    def save_chunk_up_directions(self):
+        if not self.chunk_up_records:
+            return
+        output_path = os.path.join(self.output_dir, 'chunk_up_directions.json')
+        with open(output_path, 'w', encoding='utf-8') as fp:
+            json.dump(self.chunk_up_records, fp, indent=2)
+        print(f"Chunk up directions saved to {output_path}")
 
     def close(self):
         '''
