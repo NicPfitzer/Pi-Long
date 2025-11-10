@@ -582,6 +582,19 @@ class Pi_Long:
             conf_np = np.squeeze(conf_np, axis=-1)
         return conf_np
 
+    def _compute_segmentation_conf_threshold(self, conf_slice):
+        explicit = self.seg_cfg.get('confidence_threshold')
+        if explicit is not None:
+            return float(explicit)
+        if conf_slice is None:
+            return None
+        valid = conf_slice[np.isfinite(conf_slice)]
+        valid = valid[valid > 1e-5]
+        if valid.size == 0:
+            return None
+        coef = float(self.config['Model']['Pointcloud_Save'].get('conf_threshold_coef', 0.75))
+        return float(valid.mean() * coef)
+
     def run_segmentation_pipeline(self):
         prompt = self.seg_cfg.get('prompt')
         if not prompt:
@@ -627,6 +640,7 @@ class Pi_Long:
 
             points_slice = np.asarray(chunk_points[unique_start:])
             conf_slice = self._prepare_conf_map(chunk_conf[unique_start:])
+            depth_conf_threshold = self._compute_segmentation_conf_threshold(conf_slice)
             target_h, target_w = chunk_images.shape[2], chunk_images.shape[3]
             segments_per_frame = []
 
@@ -640,7 +654,7 @@ class Pi_Long:
                     box_threshold=self.seg_cfg.get('box_threshold', 0.35),
                     text_threshold=self.seg_cfg.get('text_threshold', 0.25),
                     box_shrink_ratio=self.seg_cfg.get('box_shrink_ratio', 1.0),
-                    morph_kernel=self.seg_cfg.get('morph_kernel', 3),
+                    morph_kernel=self.seg_cfg.get('morph_kernel', 0),
                     target_size=(target_h, target_w),
                     processor=processor,
                     debug=self.seg_cfg.get('debug', False),
@@ -651,7 +665,7 @@ class Pi_Long:
                 frame_paths=frame_paths,
                 segments_per_frame=segments_per_frame,
                 depth_conf=conf_slice,
-                depth_conf_threshold=self.seg_cfg.get('confidence_threshold'),
+                depth_conf_threshold=depth_conf_threshold,
                 min_mask_area=self.seg_cfg.get('min_mask_area', 200),
                 max_points_per_label=max_points_per_label,
                 world_points=points_slice,
