@@ -124,7 +124,7 @@ def run_segmentation_clustering(
         if cfg.max_instances_per_label:
             clusters_sorted = clusters_sorted[: cfg.max_instances_per_label]
 
-            label_dir = instance_root / label_ply.stem
+        label_dir = instance_root / label_ply.stem
         label_dir.mkdir(parents=True, exist_ok=True)
         label_color = np.asarray(label_to_color(label_name), dtype=np.uint8)
 
