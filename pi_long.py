@@ -52,6 +52,7 @@ from grounded_sam2_vggt_pointcloud import (
     subsample_points,
 )
 from loop_utils.segmentation_postprocess import (
+    aggregate_instance_cloud,
     run_segmentation_clustering,
     save_instance_metadata,
 )
@@ -749,6 +750,13 @@ class Pi_Long:
                 if cluster_summary:
                     summary_path = save_instance_metadata(base_dir, cluster_summary)
                     print(f"[Segmentation] Instance metadata saved to {summary_path}")
+                    aggregated = aggregate_instance_cloud(base_dir / "instances")
+                    if aggregated is not None:
+                        inst_points, inst_colors = aggregated
+                        save_ply_ascii(base_dir / "merged_point_cloud.ply", inst_points, inst_colors)
+                        print("[Segmentation] Merged point cloud updated with clustered instances.")
+                    else:
+                        print("[Segmentation] Clustering produced metadata but no points to merge.")
                 else:
                     print("[Segmentation] Clustering produced no instances.")
 

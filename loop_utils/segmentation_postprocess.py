@@ -18,7 +18,7 @@ class ClusteringParams:
     max_instances_per_label: Optional[int] = None
 
 
-def _load_points_from_ply(path: Path) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+def load_points_from_ply(path: Path) -> Tuple[np.ndarray, Optional[np.ndarray]]:
     ply = PlyData.read(path)
     vertex = ply["vertex"]
     pts = np.column_stack([vertex["x"], vertex["y"], vertex["z"]]).astype(np.float32)
@@ -95,7 +95,7 @@ def run_segmentation_clustering(
     instance_metadata: Dict[str, List[Dict[str, object]]] = {}
     for label_ply in sorted(per_label_dir.glob("*.ply")):
         label_name = label_ply.stem.replace("_", " ")
-        pts, cols = _load_points_from_ply(label_ply)
+        pts, cols = load_points_from_ply(label_ply)
         print(f"[Clustering] Label '{label_name}': {len(pts)} raw points from {label_ply.name}")
         pts, cols = _voxel_downsample(pts, cols, cfg.voxel_size or 0.0)
         print(f"[Clustering] Label '{label_name}': {len(pts)} points after voxelization")
@@ -124,7 +124,7 @@ def run_segmentation_clustering(
         if cfg.max_instances_per_label:
             clusters_sorted = clusters_sorted[: cfg.max_instances_per_label]
 
-        label_dir = instance_root / label_ply.stem
+            label_dir = instance_root / label_ply.stem
         label_dir.mkdir(parents=True, exist_ok=True)
         label_color = np.asarray(label_to_color(label_name), dtype=np.uint8)
 
@@ -170,3 +170,21 @@ def save_instance_metadata(base_dir: Path, instances: Dict[str, List[Dict[str, o
     with metadata_path.open("w", encoding="utf-8") as fp:
         json.dump(instances, fp, indent=2)
     return metadata_path
+
+
+def aggregate_instance_cloud(instance_root: Path) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    if not instance_root.exists():
+        return None
+    all_points: List[np.ndarray] = []
+    all_colors: List[np.ndarray] = []
+    for ply_path in sorted(instance_root.rglob("*.ply")):
+        pts, cols = load_points_from_ply(ply_path)
+        if len(pts) == 0:
+            continue
+        if cols is None:
+            cols = np.zeros((len(pts), 3), dtype=np.uint8)
+        all_points.append(pts)
+        all_colors.append(cols)
+    if not all_points:
+        return None
+    return np.concatenate(all_points, axis=0), np.concatenate(all_colors, axis=0)
