@@ -68,7 +68,7 @@ Segmentation:
     enable: True
     label: "electric pole"
     min_points: 150
-    outlier_z_thresh: 2.5
+    outlier_z_thresh: 4.0
     samples_per_segment: 32
     sag_fraction: 0.025
     spacing_factor: 2.5
