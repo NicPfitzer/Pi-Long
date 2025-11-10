@@ -43,7 +43,7 @@ Loop:
     lambda_init: 1e-6
 
 Segmentation:
-  enable: False
+  enable: True
   prompt: ""
   sam2_checkpoint: "./checkpoints/sam2.1_hiera_large.pt"
   sam2_config: "configs/sam2.1/sam2.1_hiera_l.yaml"
