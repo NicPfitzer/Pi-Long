@@ -29,10 +29,12 @@ onnxruntime>=1.16.0
 opencv-python==4.10.0.84
 pandas>=2.2.2
 Pillow
+plyfile
 prettytable
 pyceres==2.3
 pycocotools>=2.0.8
 pycolmap==3.10.0
+pypose
 pydantic==2.10.6
 pyparsing
 pytorch-lightning
