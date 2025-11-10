@@ -108,13 +108,13 @@ def _compute_oriented_bbox(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, 
     return centroid, axes, local_min, local_max
 
 
-def _save_bbox_mesh(path: Path, corners: np.ndarray) -> None:
-    base_color = np.array([[255, 85, 0]], dtype=np.uint8)
+def _save_bbox_mesh(path: Path, corners: np.ndarray, color: Sequence[int]) -> None:
+    base_color = np.asarray(color, dtype=np.uint8)[None, :]
     colors = np.repeat(base_color, len(corners), axis=0)
     save_ply_ascii(path, corners, colors)
 
 
-def _load_poles(instance_dir: Path, min_points: int) -> List[PoleInstance]:
+def _load_poles(instance_dir: Path, min_points: int, bbox_color: Sequence[int]) -> List[PoleInstance]:
     poles: List[PoleInstance] = []
     skipped = 0
     for ply_path in sorted(instance_dir.glob("*.ply")):
@@ -143,7 +143,7 @@ def _load_poles(instance_dir: Path, min_points: int) -> List[PoleInstance]:
             height_axis=height_axis,
         )
         bbox_path = ply_path.with_name(f"{ply_path.stem}_bbox.ply")
-        _save_bbox_mesh(bbox_path, pole.all_corners())
+        _save_bbox_mesh(bbox_path, pole.all_corners(), bbox_color)
         logger.debug("Saved oriented bbox for %s to %s", ply_path.name, bbox_path.name)
         poles.append(pole)
     logger.info(
@@ -308,7 +308,9 @@ def fit_electric_pole_wires(
     outlier_z_thresh: float = 2.5,
     samples_per_segment: int = 32,
     sag_fraction: float = 0.025,
-    spacing_factor: Optional[float] = 4.0,
+    spacing_factor: Optional[float] = 2.5,
+    wire_color: Sequence[int] = (90, 90, 90),
+    bbox_color: Sequence[int] = (255, 85, 0),
 ) -> Optional[WireFittingResult]:
     logger.info(
         "Starting wire fitting for label='%s' (root=%s)",
@@ -321,7 +323,7 @@ def fit_electric_pole_wires(
         logger.warning("Label directory %s does not exist; skipping", label_dir)
         return None
 
-    poles = _load_poles(label_dir, min_points=min_points)
+    poles = _load_poles(label_dir, min_points=min_points, bbox_color=bbox_color)
     if len(poles) < 2:
         logger.warning(
             "Need at least two poles to fit wires; got %d in %s",
@@ -341,7 +343,7 @@ def fit_electric_pole_wires(
         connections,
         samples_per_segment=samples_per_segment,
         sag_fraction=sag_fraction,
-        color=(90, 90, 90),
+        color=wire_color,
     )
     wire_path = label_dir / f"{label_slug}_wires.ply"
     save_ply_ascii(wire_path, points, colors)
