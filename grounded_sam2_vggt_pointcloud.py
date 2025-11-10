@@ -31,6 +31,7 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 from torchvision.ops import box_convert
 from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
+
 from utils.video_utils import create_video_from_images
 from vggt.models.vggt import VGGT
 from vggt.utils.geometry import depth_to_world_coords_points
