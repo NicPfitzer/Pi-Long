@@ -44,13 +44,13 @@ Loop:
 
 Segmentation:
   enable: True
-  prompt: ""
+  prompt: "tree. electric pole. building."
   sam2_checkpoint: "./checkpoints/sam2.1_hiera_large.pt"
   sam2_config: "configs/sam2.1/sam2.1_hiera_l.yaml"
   grounding_dino_model_id: "rziga/mm_grounding_dino_large_all"
   device: null
-  box_threshold: 0.35
-  text_threshold: 0.25
+  box_threshold: 0.2
+  text_threshold: 0.2
   box_shrink_ratio: 1.0
   morph_kernel: 3
   min_mask_area: 200
