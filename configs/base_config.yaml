@@ -61,6 +61,6 @@ Segmentation:
     enable: True
     eps: 0.05  # DBSCAN neighborhood radius in world units (points within this distance are considered neighbors)
     min_samples: 30
-    min_cluster_points: 500
-    voxel_size: 0.02
+    min_cluster_points: 300
+    voxel_size: 0.01
     max_instances_per_label: null

@@ -742,31 +742,54 @@ def aggregate_point_clouds(
                     f"[Debug] Frame {global_frame_idx:04d}: skipping full reconstruction contribution (no valid points)."
                 )
 
-        for seg in segments or []:
-            mask = seg.mask & valid_mask
-            mask_sum = int(mask.sum())
-            if mask_sum < max(min_mask_area, 1):
-                if debug_log:
-                    print(
-                        f"[Debug]   Mask '{seg.label}' skipped: area {mask_sum} < min_mask_area {min_mask_area}."
+        segment_list = segments or []
+        if segment_list:
+            label_indices: Dict[str, int] = {}
+            pixel_labels = np.full(valid_mask.shape, -1, dtype=np.int32)
+            pixel_scores = np.full(valid_mask.shape, -np.inf, dtype=np.float32)
+
+            for seg in segment_list:
+                seg_mask = seg.mask
+                if seg_mask.shape != valid_mask.shape:
+                    raise ValueError(
+                        f"Segment mask shape {seg_mask.shape} does not match VGGT grid {valid_mask.shape}"
                     )
-                continue
-            pts = world_points_frame[mask]
-            if pts.size == 0:
-                if debug_log:
-                    print(
-                        f"[Debug]   Mask '{seg.label}' skipped: no valid VGGT points after depth/conf filtering."
-                    )
-                continue
-            label_key = seg.label or "unknown"
-            label_to_points.setdefault(label_key, []).append(pts)
-            stat = label_stats.setdefault(
-                label_key,
-                {"total_pixels": 0, "instances": 0, "frames": set()},
-            )
-            stat["total_pixels"] += mask_sum
-            stat["instances"] += 1
-            stat["frames"].add(global_frame_idx)
+                mask = seg_mask & valid_mask
+                mask_sum = int(mask.sum())
+                if mask_sum < max(min_mask_area, 1):
+                    if debug_log:
+                        print(
+                            f"[Debug]   Mask '{seg.label}' skipped: area {mask_sum} < min_mask_area {min_mask_area}."
+                        )
+                    continue
+                better_mask = mask & (seg.score > pixel_scores)
+                if not np.any(better_mask):
+                    if debug_log:
+                        print(
+                            f"[Debug]   Mask '{seg.label}' skipped: no pixels beat existing assignments."
+                        )
+                    continue
+                label_key = (seg.label or "unknown").strip()
+                label_idx = label_indices.setdefault(label_key, len(label_indices))
+                pixel_scores[better_mask] = seg.score
+                pixel_labels[better_mask] = label_idx
+
+            for label_key, label_idx in label_indices.items():
+                assignment_mask = (pixel_labels == label_idx)
+                assigned_pixels = int(assignment_mask.sum())
+                if assigned_pixels == 0:
+                    continue
+                pts = world_points_frame[assignment_mask]
+                if pts.size == 0:
+                    continue
+                label_to_points.setdefault(label_key, []).append(pts)
+                stat = label_stats.setdefault(
+                    label_key,
+                    {"total_pixels": 0, "instances": 0, "frames": set()},
+                )
+                stat["total_pixels"] += assigned_pixels
+                stat["instances"] += 1
+                stat["frames"].add(global_frame_idx)
 
     concatenated: Dict[str, np.ndarray] = {}
     normalized_stats: Dict[str, Dict[str, float]] = {}
