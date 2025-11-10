@@ -600,6 +600,12 @@ class Pi_Long:
         if not prompt:
             print("[Segmentation] Prompt not provided; skipping segmentation.")
             return
+        allowed_labels = {
+            item.strip().lower() for item in prompt.split('.') if item.strip()
+        }
+        if not allowed_labels:
+            print("[Segmentation] Prompt produced no valid labels; skipping segmentation.")
+            return
 
         try:
             predictor, grounding_model, processor, seg_device = self._get_segmentation_models()
@@ -659,7 +665,8 @@ class Pi_Long:
                     processor=processor,
                     debug=self.seg_cfg.get('debug', False),
                 )
-                segments_per_frame.append(segs)
+                filtered = [seg for seg in segs if seg.label.strip().lower() in allowed_labels]
+                segments_per_frame.append(filtered)
 
             label_points, label_stats = aggregate_point_clouds(
                 frame_paths=frame_paths,
