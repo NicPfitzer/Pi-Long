@@ -21,10 +21,12 @@ lightglue @ git+https://github.com/jytime/LightGlue.git
 matplotlib>=3.9.1
 mypy>=1.11.1
 numba==0.61.2
+# Keep NumPy on the 1.x ABI to stay compatible with prebuilt CV/geometry wheels.
 numpy==1.26.1
 omegaconf>=2.3.0
 onnxruntime>=1.16.0
-opencv-python>=4.7.0
+# OpenCV needs to be compiled against the pinned NumPy version.
+opencv-python==4.10.0.84
 pandas>=2.2.2
 Pillow
 prettytable
