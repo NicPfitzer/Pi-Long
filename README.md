@@ -163,6 +163,30 @@ ffmpeg -i your_video.mp4 -vf "fps=5,scale=640:-1" ./extract_images/frame_%06d.pn
 
 **Note on Space Requirements**: Just the same as `VGGT-Long`, please ensure your machine has sufficient disk space before running the code for `Pi-Long`. When finishing, the code will delete these intermediate results to prevent excessive disk usage.
 
+### ⚡ Electric Pole Wire Fitting
+
+The segmentation post-processing pipeline now includes an optional wire fitting stage (see `loop_utils/wire_fitting.py`). When `Segmentation.wire_fitting.enable` is `True`, the clustered `"electric pole"` instances are:
+
+1. Filtered with robust statistics to drop boxes that are far outside the typical pole size distribution;
+2. Sorted along the dominant PCA axis so that nearest-neighbour links follow the physical ordering of poles;
+3. Connected with up to two neighbours per pole, producing four sagged poly-lines (one per top-box corner) for every valid connection.
+
+The wires are exported as `segmentation/instances/electric_pole/electric_pole_wires.ply` plus a companion JSON file that lists all connections, distances, and suggested next-step heuristics (MST-based linking, pose-aware ordering, heading gating). Tune the behaviour through `Segmentation.wire_fitting` in `configs/base_config.yaml`:
+
+```yaml
+Segmentation:
+  wire_fitting:
+    enable: True
+    label: "electric pole"
+    min_points: 150
+    outlier_z_thresh: 2.5
+    samples_per_segment: 32
+    sag_fraction: 0.025
+    spacing_factor: 2.5
+```
+
+Disabling the block or setting `spacing_factor` to `null` skips the trimming step if you need to keep long-distance spans.
+
 ## Acknowledgements
 
 Our project is based on [VGGT](https://github.com/facebookresearch/vggt), [VGGT-Long](https://github.com/DengKaiCQ/VGGT-Long) and [Pi3](https://github.com/yyfz/Pi3). Our work would not have been possible without these excellent repositories.

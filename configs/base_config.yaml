@@ -64,3 +64,11 @@ Segmentation:
     min_cluster_points: 300
     voxel_size: 0.01
     max_instances_per_label: null
+  wire_fitting:
+    enable: True
+    label: "electric pole"
+    min_points: 150
+    outlier_z_thresh: 2.5
+    samples_per_segment: 32
+    sag_fraction: 0.025
+    spacing_factor: 2.5

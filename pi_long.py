@@ -56,6 +56,7 @@ from loop_utils.segmentation_postprocess import (
     run_segmentation_clustering,
     save_instance_metadata,
 )
+from loop_utils.wire_fitting import fit_electric_pole_wires
 
 def remove_duplicates(data_list):
     """
@@ -757,6 +758,41 @@ class Pi_Long:
                         print("[Segmentation] Merged point cloud updated with clustered instances.")
                     else:
                         print("[Segmentation] Clustering produced metadata but no points to merge.")
+                    wire_cfg = self.seg_cfg.get("wire_fitting", {})
+                    if wire_cfg.get("enable", False):
+                        spacing_cfg = wire_cfg.get("spacing_factor", 2.5)
+                        spacing_factor = (
+                            float(spacing_cfg) if spacing_cfg is not None else None
+                        )
+                        try:
+                            wire_result = fit_electric_pole_wires(
+                                instance_root=base_dir / "instances",
+                                label_name=wire_cfg.get("label", "electric pole"),
+                                min_points=int(wire_cfg.get("min_points", 150)),
+                                outlier_z_thresh=float(
+                                    wire_cfg.get("outlier_z_thresh", 2.5)
+                                ),
+                                samples_per_segment=int(
+                                    wire_cfg.get("samples_per_segment", 32)
+                                ),
+                                sag_fraction=float(wire_cfg.get("sag_fraction", 0.025)),
+                                spacing_factor=spacing_factor,
+                            )
+                        except Exception as exc:
+                            print(f"[Segmentation] Wire fitting failed: {exc}")
+                        else:
+                            if wire_result:
+                                print(
+                                    "[Segmentation] Electric pole wires saved to "
+                                    f"{wire_result.wire_path} ({wire_result.num_connections} connections)."
+                                )
+                                print(
+                                    f"[Segmentation] Wire metadata saved to {wire_result.metadata_path}."
+                                )
+                            else:
+                                print(
+                                    "[Segmentation] Wire fitting skipped (insufficient electric pole instances)."
+                                )
                 else:
                     print("[Segmentation] Clustering produced no instances.")
 
