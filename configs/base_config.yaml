@@ -20,7 +20,7 @@ Model:
 
   Pointcloud_Save:
     sample_ratio: 0.015
-    conf_threshold_coef: 0.75 # conf_threshold = np.mean(confs) * conf_threshold_coef
+    conf_threshold_coef: 0.65 # conf_threshold = np.mean(confs) * conf_threshold_coef
 
 Loop:
   DBoW:
@@ -57,3 +57,10 @@ Segmentation:
   max_points_per_label: 300000
   confidence_threshold: null
   no_merged_cloud: False
+  clustering:
+    enable: True
+    eps: 0.4
+    min_samples: 30
+    min_cluster_points: 500
+    voxel_size: 0.05
+    max_instances_per_label: null

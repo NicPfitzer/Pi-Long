@@ -51,6 +51,10 @@ from grounded_sam2_vggt_pointcloud import (
     save_ply_ascii,
     subsample_points,
 )
+from loop_utils.segmentation_postprocess import (
+    run_segmentation_clustering,
+    save_instance_metadata,
+)
 
 def remove_duplicates(data_list):
     """
@@ -730,6 +734,23 @@ class Pi_Long:
             json.dump(metadata, f, indent=2)
         print(f"[Segmentation] Metadata saved to {metadata_path}")
         print(f"[Segmentation] Completed segmentation over {total_frames} unique frames.")
+
+        clustering_cfg = self.seg_cfg.get("clustering", {})
+        if clustering_cfg.get("enable"):
+            try:
+                cluster_summary = run_segmentation_clustering(
+                    per_label_dir=per_label_dir,
+                    instance_root=base_dir / "instances",
+                    cfg_mapping=clustering_cfg,
+                )
+            except ImportError as exc:
+                print(f"[Segmentation] Clustering skipped (scikit-learn missing): {exc}")
+            else:
+                if cluster_summary:
+                    summary_path = save_instance_metadata(base_dir, cluster_summary)
+                    print(f"[Segmentation] Instance metadata saved to {summary_path}")
+                else:
+                    print("[Segmentation] Clustering produced no instances.")
 
         # Free segmentation models to release GPU memory
         self.segmentation_models = None
