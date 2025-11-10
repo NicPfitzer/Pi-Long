@@ -59,8 +59,8 @@ Segmentation:
   no_merged_cloud: False
   clustering:
     enable: True
-    eps: 0.4
+    eps: 0.05  # DBSCAN neighborhood radius in world units (points within this distance are considered neighbors)
     min_samples: 30
     min_cluster_points: 500
-    voxel_size: 0.05
+    voxel_size: 0.02
     max_instances_per_label: null

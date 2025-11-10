@@ -83,16 +83,29 @@ def run_segmentation_clustering(
         ),
     )
 
+    print(
+        "[Clustering] Running DBSCAN with "
+        f"eps={cfg.eps} (max neighborhood radius), "
+        f"min_samples={cfg.min_samples}, "
+        f"min_cluster_points={cfg.min_cluster_points}, "
+        f"voxel_size={cfg.voxel_size}, "
+        f"max_instances_per_label={cfg.max_instances_per_label}"
+    )
+
     instance_metadata: Dict[str, List[Dict[str, object]]] = {}
     for label_ply in sorted(per_label_dir.glob("*.ply")):
         label_name = label_ply.stem.replace("_", " ")
         pts, cols = _load_points_from_ply(label_ply)
+        print(f"[Clustering] Label '{label_name}': {len(pts)} raw points from {label_ply.name}")
         pts, cols = _voxel_downsample(pts, cols, cfg.voxel_size or 0.0)
+        print(f"[Clustering] Label '{label_name}': {len(pts)} points after voxelization")
         if len(pts) == 0:
+            print(f"[Clustering] Label '{label_name}': no points after preprocessing, skipping.")
             continue
 
         labels = _cluster_points(pts, cfg)
         if labels.size == 0:
+            print(f"[Clustering] Label '{label_name}': DBSCAN returned no labels, skipping.")
             continue
 
         clusters = [
@@ -101,6 +114,7 @@ def run_segmentation_clustering(
             if cluster_label != -1
         ]
         if not clusters:
+            print(f"[Clustering] Label '{label_name}': only noise detected, skipping.")
             continue
 
         clusters_sorted = sorted(
@@ -119,6 +133,10 @@ def run_segmentation_clustering(
             mask = labels == cluster_label
             cluster_size = int(mask.sum())
             if cluster_size < cfg.min_cluster_points:
+                print(
+                    f"[Clustering] Label '{label_name}' cluster {cluster_label} "
+                    f"dropped ({cluster_size} pts < min_cluster_points={cfg.min_cluster_points})"
+                )
                 continue
             inst_points = pts[mask]
             if cols is not None:
@@ -128,6 +146,10 @@ def run_segmentation_clustering(
 
             instance_path = label_dir / f"{label_ply.stem}_inst_{inst_idx:03d}.ply"
             save_ply_ascii(instance_path, inst_points, inst_colors)
+            print(
+                f"[Clustering] Label '{label_name}': saved instance {inst_idx} with {cluster_size} points "
+                f"to {instance_path.relative_to(instance_root.parent)}"
+            )
             instances.append(
                 {
                     "instance": inst_idx,
@@ -138,6 +160,8 @@ def run_segmentation_clustering(
             )
         if instances:
             instance_metadata[label_name] = instances
+        else:
+            print(f"[Clustering] Label '{label_name}': no clusters met the size threshold.")
     return instance_metadata
 
 
