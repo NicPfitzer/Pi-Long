@@ -153,6 +153,10 @@ class Pi_Long:
 
         self.loop_sim3_list = [] # [(chunk_idx_a, chunk_idx_b, s [1,], R [3,3], T [3,]), ...]
 
+        self.global_rebase_transform = None
+        self._global_rebase_rotation = None
+        self._global_rebase_translation = None
+
         self.loop_predict_list = []
 
         self.loop_enable = self.config['Model']['loop_enable']
@@ -412,6 +416,7 @@ class Pi_Long:
 
         print('Apply alignment')
         self.sim3_list = accumulate_sim3_transforms(self.sim3_list)
+        self._get_global_rebase_transform()
         for chunk_idx in range(len(self.chunk_indices)-1):
             print(f'Applying {chunk_idx+1} -> {chunk_idx} (Total {len(self.chunk_indices)-1})')
             s, R, t = self.sim3_list[chunk_idx]
@@ -419,12 +424,14 @@ class Pi_Long:
             chunk_data = np.load(os.path.join(self.result_unaligned_dir, f"chunk_{chunk_idx+1}.npy"), allow_pickle=True).item()
             
             chunk_data['points'] = apply_sim3_direct(chunk_data['points'], s, R, t)
+            chunk_data['points'] = self._apply_global_rebase_to_points(chunk_data['points'])
             
             aligned_path = os.path.join(self.result_aligned_dir, f"chunk_{chunk_idx+1}.npy")
             np.save(aligned_path, chunk_data)
             
             if chunk_idx == 0:
                 chunk_data_first = np.load(os.path.join(self.result_unaligned_dir, f"chunk_0.npy"), allow_pickle=True).item()
+                chunk_data_first['points'] = self._apply_global_rebase_to_points(chunk_data_first['points'])
                 np.save(os.path.join(self.result_aligned_dir, "chunk_0.npy"), chunk_data_first)
             
             aligned_chunk_data = np.load(os.path.join(self.result_aligned_dir, f"chunk_{chunk_idx}.npy"), allow_pickle=True).item() if chunk_idx > 0 else chunk_data_first
@@ -515,6 +522,10 @@ class Pi_Long:
 
                 all_poses[idx] = transformed_c2w
 
+        rebase = self._get_global_rebase_transform()
+        for idx, pose in enumerate(all_poses):
+            all_poses[idx] = rebase @ pose
+
         poses_path = os.path.join(self.output_dir, 'camera_poses.txt')
         with open(poses_path, 'w') as f:
             for pose in all_poses:
@@ -543,6 +554,39 @@ class Pi_Long:
                 f.write(f'{position[0]} {position[1]} {position[2]} {color[0]} {color[1]} {color[2]}\n')
         
         print(f"Camera poses visualization saved to {ply_path}")
+
+    @staticmethod
+    def _to_homogeneous(pose):
+        pose = np.asarray(pose)
+        if pose.shape == (4, 4):
+            return pose
+        if pose.shape == (3, 4):
+            hom = np.eye(4, dtype=pose.dtype)
+            hom[:3, :4] = pose
+            return hom
+        raise ValueError(f"Unexpected pose shape {pose.shape}")
+
+    def _get_global_rebase_transform(self):
+        if self.global_rebase_transform is not None:
+            return self.global_rebase_transform
+        if not self.all_camera_poses:
+            raise RuntimeError("No camera poses collected; cannot compute global rebase transform.")
+        first_chunk_range, first_chunk_extrinsics = self.all_camera_poses[0]
+        if len(first_chunk_extrinsics) == 0:
+            raise RuntimeError("First chunk has no poses; cannot compute global rebase transform.")
+        base_pose = self._to_homogeneous(first_chunk_extrinsics[0])
+        inv_pose = np.linalg.inv(base_pose)
+        self.global_rebase_transform = inv_pose
+        self._global_rebase_rotation = inv_pose[:3, :3]
+        self._global_rebase_translation = inv_pose[:3, 3]
+        return self.global_rebase_transform
+
+    def _apply_global_rebase_to_points(self, points):
+        self._get_global_rebase_transform()
+        dtype = points.dtype
+        R = self._global_rebase_rotation.astype(dtype, copy=False)
+        t = self._global_rebase_translation.astype(dtype, copy=False)
+        return apply_sim3_direct(points, 1.0, R, t)
 
     def _validate_segmentation_config(self):
         required = ["prompt", "sam2_checkpoint", "sam2_config", "grounding_dino_model_id"]
