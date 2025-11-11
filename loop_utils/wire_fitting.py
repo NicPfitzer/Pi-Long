@@ -393,7 +393,16 @@ def _pole_up_direction(pole: PoleInstance) -> np.ndarray:
     return pole.up_direction
 
 
-def _connection_sag_direction(conn: WireConnection) -> np.ndarray:
+def _connection_sag_direction(
+    conn: WireConnection,
+    *,
+    world_up: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    if world_up is not None:
+        up = np.asarray(world_up, dtype=np.float32).reshape(3)
+        norm = np.linalg.norm(up)
+        if norm >= 1e-6:
+            return -up / norm
     up_a = _pole_up_direction(conn.source)
     up_b = _pole_up_direction(conn.target)
     up = up_a + up_b
@@ -415,37 +424,56 @@ def _compute_degree_map(connections: Sequence[WireConnection]) -> Dict[Path, int
     return dict(degree)
 
 
+def _match_corners_by_distance(
+    corners_a: np.ndarray,
+    corners_b: np.ndarray,
+    max_pairs: int,
+) -> Sequence[Tuple[int, int]]:
+    num_pairs = min(max_pairs, len(corners_a), len(corners_b))
+    if num_pairs <= 0:
+        return tuple()
+    distances = np.linalg.norm(
+        corners_a[:, None, :] - corners_b[None, :, :],
+        axis=2,
+    )
+    indices_a = range(len(corners_a))
+    indices_b = range(len(corners_b))
+    best_pairs: Optional[Tuple[Tuple[int, int], ...]] = None
+    best_cost = np.inf
+    for subset_a in itertools.combinations(indices_a, num_pairs):
+        for perm_b in itertools.permutations(indices_b, num_pairs):
+            cost = 0.0
+            for idx_a, idx_b in zip(subset_a, perm_b):
+                cost += float(distances[idx_a, idx_b])
+                if cost >= best_cost:
+                    break
+            else:
+                best_cost = cost
+                pairs = tuple((idx_a, idx_b) for idx_a, idx_b in zip(subset_a, perm_b))
+                best_pairs = pairs
+    if best_pairs is None:
+        return ((0, 0),)
+    return tuple(
+        pair
+        for pair, _ in sorted(
+            ((pair, float(distances[pair[0], pair[1]])) for pair in best_pairs),
+            key=lambda item: item[1],
+        )
+    )
+
+
 def _corner_indices_for_connection(
     conn: WireConnection,
     degree_map: Dict[Path, int],
 ) -> Sequence[Tuple[int, int]]:
     deg_source = degree_map.get(conn.source.path, 0)
     deg_target = degree_map.get(conn.target.path, 0)
-    if deg_source > 1 and deg_target > 1:
-        return tuple((i, i) for i in range(4))
     corners_a = conn.source.top_corners()
     corners_b = conn.target.top_corners()
     if len(corners_a) != 4 or len(corners_b) != 4:
         return ((0, 0),)
-    deltas = corners_a[:, None, :] - corners_b[None, :, :]
-    distances = np.linalg.norm(deltas, axis=2)
-    flat_indices = np.argsort(distances, axis=None)
-    used_a = set()
-    used_b = set()
-    pairs: List[Tuple[int, int]] = []
-    for flat_idx in flat_indices:
-        idx_a = int(flat_idx // distances.shape[1])
-        idx_b = int(flat_idx % distances.shape[1])
-        if idx_a in used_a or idx_b in used_b:
-            continue
-        pairs.append((idx_a, idx_b))
-        used_a.add(idx_a)
-        used_b.add(idx_b)
-        if len(pairs) >= 2:
-            break
-    if not pairs:
-        pairs.append((0, 0))
-    return tuple(pairs)
+    max_pairs = 4 if (deg_source > 1 and deg_target > 1) else 2
+    return _match_corners_by_distance(corners_a, corners_b, max_pairs=max_pairs)
 
 
 def _sample_wire(
@@ -475,6 +503,8 @@ def _build_wire_cloud(
     samples_per_segment: int,
     sag_fraction: float,
     color: Sequence[int],
+    *,
+    world_up: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, List[dict]]:
     if not connections:
         logger.debug("No connections provided; returning empty wire cloud")
@@ -490,7 +520,7 @@ def _build_wire_cloud(
     metadata: List[dict] = []
     color_arr = np.asarray(color, dtype=np.uint8)
     for conn_idx, conn in enumerate(connections):
-        sag_direction = _connection_sag_direction(conn)
+        sag_direction = _connection_sag_direction(conn, world_up=world_up)
         corners_a = conn.source.top_corners()
         corners_b = conn.target.top_corners()
         corner_pairs = _corner_indices_for_connection(conn, degree_map)
@@ -581,6 +611,7 @@ def fit_electric_pole_wires(
         samples_per_segment=samples_per_segment,
         sag_fraction=sag_fraction,
         color=wire_color,
+        world_up=normalized_up,
     )
     wire_path = label_dir / f"{label_slug}_wires.ply"
     save_ply_ascii(wire_path, points, colors)
