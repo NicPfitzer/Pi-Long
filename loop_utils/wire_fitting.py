@@ -24,7 +24,7 @@ class PoleInstance:
     local_max: np.ndarray
     extents: np.ndarray
     height_axis: int
-    world_up: Optional[np.ndarray] = None
+    up_direction: Optional[np.ndarray] = None
 
     @property
     def height(self) -> float:
@@ -41,10 +41,8 @@ class PoleInstance:
     def top_corners(self) -> np.ndarray:
         lateral_axes = [idx for idx in range(3) if idx != self.height_axis]
         axis_vec = self.axes[:, self.height_axis].astype(np.float32)
-        if self.world_up is not None:
-            alignment = float(np.dot(axis_vec, self.world_up))
-        else:
-            alignment = float(axis_vec[2])
+        up_dir = _pole_up_direction(self)
+        alignment = float(np.dot(axis_vec, up_dir))
         top_value = (
             self.local_max[self.height_axis]
             if alignment >= 0.0
@@ -83,12 +81,6 @@ class WireFittingResult:
     metadata_path: Path
     num_connections: int
 
-
-SUGGESTED_HEURISTICS = [
-    "Fit a 2D minimum spanning tree across pole centroids to better capture gentle turns.",
-    "Leverage camera pose ordering to break the network into monotonic sub-sequences before linking.",
-    "Score candidate edges by both distance and pole heading similarity to avoid spurious cross-street wires.",
-]
 
 
 def _mad_mask(values: np.ndarray, z_thresh: float) -> np.ndarray:
@@ -219,6 +211,38 @@ def _save_bbox_mesh(path: Path, corners: np.ndarray, color: Sequence[int]) -> No
     save_ply_ascii(path, corners, colors)
 
 
+def _resolve_height_axis(
+    axes: np.ndarray,
+    extents: np.ndarray,
+    preferred_up: Optional[np.ndarray],
+) -> Tuple[int, np.ndarray]:
+    axis_vectors = np.asarray(axes, dtype=np.float32).T
+    if preferred_up is not None:
+        alignments = axis_vectors @ preferred_up
+        best_idx = int(np.argmax(np.abs(alignments)))
+        up_dir = axis_vectors[best_idx]
+        if alignments[best_idx] < 0:
+            up_dir = -up_dir
+        norm = np.linalg.norm(up_dir)
+        if norm >= 1e-6:
+            return best_idx, up_dir / norm
+    fallback_idx = int(np.argmax(extents))
+    up_dir = axis_vectors[fallback_idx]
+    reference = preferred_up
+    if reference is None:
+        reference = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+    if np.dot(up_dir, reference) < 0:
+        up_dir = -up_dir
+    norm = np.linalg.norm(up_dir)
+    if norm < 1e-6:
+        up_dir = reference
+        norm = np.linalg.norm(up_dir)
+    if norm < 1e-6:
+        up_dir = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        norm = 1.0
+    return fallback_idx, up_dir / norm
+
+
 def _load_poles(
     instance_dir: Path,
     min_points: int,
@@ -242,7 +266,7 @@ def _load_poles(
             continue
         centroid, axes, local_min, local_max = _compute_oriented_bbox(points)
         extents = (local_max - local_min).astype(np.float32)
-        height_axis = int(np.argmax(extents))
+        height_axis, up_dir = _resolve_height_axis(axes, extents, preferred_up)
         pole = PoleInstance(
             path=ply_path,
             centroid=centroid,
@@ -251,7 +275,7 @@ def _load_poles(
             local_max=local_max,
             extents=extents,
             height_axis=height_axis,
-            world_up=preferred_up.copy() if preferred_up is not None else None,
+            up_direction=up_dir,
         )
         bbox_path = ply_path.with_name(f"{ply_path.stem}_bbox.ply")
         _save_bbox_mesh(bbox_path, pole.all_corners(), bbox_color)
@@ -357,15 +381,16 @@ def _connect_poles(
 
 
 def _pole_up_direction(pole: PoleInstance) -> np.ndarray:
-    if pole.world_up is not None:
-        return pole.world_up
-    axis = pole.axes[:, pole.height_axis].astype(np.float32)
-    if axis[2] < 0:
-        axis = -axis
-    norm = np.linalg.norm(axis)
-    if norm < 1e-6:
-        return np.array([0.0, 0.0, 1.0], dtype=np.float32)
-    return axis / norm
+    if pole.up_direction is None:
+        axis = pole.axes[:, pole.height_axis].astype(np.float32)
+        if axis[2] < 0:
+            axis = -axis
+        norm = np.linalg.norm(axis)
+        if norm < 1e-6:
+            pole.up_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        else:
+            pole.up_direction = axis / norm
+    return pole.up_direction
 
 
 def _connection_sag_direction(conn: WireConnection) -> np.ndarray:
@@ -572,7 +597,6 @@ def fit_electric_pole_wires(
         "num_connections": len(connections),
         "wire_points": int(points.shape[0]),
         "connections": wire_meta,
-        "heuristic_suggestions": SUGGESTED_HEURISTICS,
         "global_up_vector": normalized_up.tolist() if normalized_up is not None else None,
         "global_up_source": "reconstruction_chunks" if normalized_up is not None else "pole_bbox_principal_axis",
     }
