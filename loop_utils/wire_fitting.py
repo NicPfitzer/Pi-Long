@@ -213,6 +213,37 @@ def _compute_oriented_bbox(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, 
     return centroid, axes, local_min, local_max
 
 
+def _align_bbox_height_axis(
+    axes: np.ndarray,
+    local_min: np.ndarray,
+    local_max: np.ndarray,
+    preferred_up: np.ndarray,
+    height_axis: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    up = np.asarray(preferred_up, dtype=np.float32).reshape(3)
+    norm = np.linalg.norm(up)
+    if norm < 1e-6:
+        return axes, local_min, local_max, height_axis
+    up /= norm
+    aligned_axes = axes.copy()
+    aligned_min = local_min.copy()
+    aligned_max = local_max.copy()
+    axis_alignment = np.abs(aligned_axes.T @ up)
+    best_axis = int(np.argmax(axis_alignment))
+    if best_axis != height_axis:
+        aligned_axes[:, [height_axis, best_axis]] = aligned_axes[:, [best_axis, height_axis]]
+        aligned_min[[height_axis, best_axis]] = aligned_min[[best_axis, height_axis]]
+        aligned_max[[height_axis, best_axis]] = aligned_max[[best_axis, height_axis]]
+        height_axis = best_axis
+    if np.dot(aligned_axes[:, height_axis], up) < 0:
+        aligned_axes[:, height_axis] *= -1.0
+        min_val = aligned_min[height_axis].copy()
+        max_val = aligned_max[height_axis].copy()
+        aligned_min[height_axis] = -max_val
+        aligned_max[height_axis] = -min_val
+    return aligned_axes, aligned_min, aligned_max, height_axis
+
+
 def _save_bbox_mesh(path: Path, corners: np.ndarray, color: Sequence[int]) -> None:
     base_color = np.asarray(color, dtype=np.uint8)[None, :]
     colors = np.repeat(base_color, len(corners), axis=0)
@@ -243,6 +274,14 @@ def _load_poles(
         extents = (local_max - local_min).astype(np.float32)
         height_axis = int(np.argmax(extents))
         if preferred_up is not None:
+            axes, local_min, local_max, height_axis = _align_bbox_height_axis(
+                axes,
+                local_min,
+                local_max,
+                preferred_up,
+                height_axis,
+            )
+            extents = (local_max - local_min).astype(np.float32)
             up_dir = preferred_up.copy()
         else:
             up_dir = axes[:, height_axis].astype(np.float32)
