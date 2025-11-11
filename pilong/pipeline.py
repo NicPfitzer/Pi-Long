@@ -473,9 +473,11 @@ class Pi_Long:
 
         self.save_camera_poses()
 
-        self.segmentation.run(self.img_list, self.chunk_indices)
-
+        # Wire fitting inside segmentation relies on chunk_up_directions.json
+        # so persist the latest estimates before running segmentation.
         self.save_chunk_up_directions()
+
+        self.segmentation.run(self.img_list, self.chunk_indices)
         
         print('Done.')
 
