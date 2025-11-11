@@ -289,9 +289,17 @@ def _filter_outlier_poles(poles: Sequence[PoleInstance], z_thresh: float) -> Lis
     heights = np.array([p.height for p in poles], dtype=np.float32)
     span_x = np.array([p.span_xy[0] for p in poles], dtype=np.float32)
     span_y = np.array([p.span_xy[1] for p in poles], dtype=np.float32)
-    mask = _mad_mask(heights, z_thresh)
-    mask &= _mad_mask(span_x, z_thresh)
-    mask &= _mad_mask(span_y, z_thresh)
+    metric_masks = np.stack(
+        (
+            _mad_mask(heights, z_thresh),
+            _mad_mask(span_x, z_thresh),
+            _mad_mask(span_y, z_thresh),
+        ),
+        axis=1,
+    )
+    allowed_failures = 1
+    fail_counts = np.count_nonzero(~metric_masks, axis=1)
+    mask = fail_counts <= allowed_failures
     filtered = [pole for pole, keep in zip(poles, mask) if keep]
     logger.info(
         "Outlier filter kept %d/%d poles using z_thresh=%.2f",
