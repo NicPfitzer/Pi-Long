@@ -40,10 +40,20 @@ class PoleInstance:
 
     def top_corners(self) -> np.ndarray:
         lateral_axes = [idx for idx in range(3) if idx != self.height_axis]
+        axis_vec = self.axes[:, self.height_axis].astype(np.float32)
+        if self.world_up is not None:
+            alignment = float(np.dot(axis_vec, self.world_up))
+        else:
+            alignment = float(axis_vec[2])
+        top_value = (
+            self.local_max[self.height_axis]
+            if alignment >= 0.0
+            else self.local_min[self.height_axis]
+        )
         local_corners: List[np.ndarray] = []
         for bit_combo in range(4):
             corner = np.empty(3, dtype=np.float32)
-            corner[self.height_axis] = self.local_max[self.height_axis]
+            corner[self.height_axis] = top_value
             for axis_offset, axis_idx in enumerate(lateral_axes):
                 use_max = (bit_combo >> axis_offset) & 1
                 corner[axis_idx] = (
@@ -106,10 +116,89 @@ def _normalize_vector(vector: Optional[Sequence[float]]) -> Optional[np.ndarray]
     return arr / norm
 
 
+def _density_trim_points(
+    points: np.ndarray,
+    *,
+    min_points_for_filter: int = 120,
+    k_neighbors: int = 10,
+    low_density_quantile: float = 0.2,
+    radius_scale: float = 1.15,
+    min_radius: float = 0.04,
+    min_keep_ratio: float = 0.35,
+) -> np.ndarray:
+    num_points = len(points)
+    if num_points == 0 or num_points < max(min_points_for_filter, k_neighbors + 1):
+        return points
+    try:
+        from sklearn.neighbors import KDTree
+    except ImportError:  # pragma: no cover - defensive fallback
+        logger.debug("scikit-learn unavailable; skipping density trimming")
+        return points
+    pts = np.asarray(points, dtype=np.float32, order="C")
+    k = min(k_neighbors, num_points - 1)
+    if k < 1:
+        return pts
+    centered = pts - pts.mean(axis=0, keepdims=True)
+    try:
+        cov = np.cov(centered, rowvar=False)
+        eigvals, eigvecs = np.linalg.eigh(cov)
+    except np.linalg.LinAlgError:
+        return pts
+    order = np.argsort(eigvals)[::-1]
+    axes = eigvecs[:, order].astype(np.float32)
+    if np.linalg.det(axes) < 0:
+        axes[:, -1] *= -1
+    local = centered @ axes
+    spreads = np.ptp(local, axis=0)
+    height_axis_idx = int(np.argmax(spreads))
+    lateral_axes = [idx for idx in range(3) if idx != height_axis_idx]
+    if len(lateral_axes) != 2:
+        return pts
+    lateral_coords = np.ascontiguousarray(local[:, lateral_axes], dtype=np.float32)
+    tree = KDTree(lateral_coords)
+    dists, _ = tree.query(lateral_coords, k=k + 1)
+    kth = dists[:, -1]
+    finite = kth[np.isfinite(kth)]
+    if finite.size == 0:
+        return pts
+    typical_scale = float(np.median(finite))
+    if typical_scale < 1e-6:
+        typical_scale = float(np.max(finite))
+    radius = max(typical_scale * radius_scale, min_radius)
+    counts = tree.query_radius(lateral_coords, r=radius, count_only=True)
+    if counts.size == 0:
+        return pts
+    density_threshold = int(np.floor(np.percentile(counts, low_density_quantile * 100.0)))
+    density_threshold = max(density_threshold, 4)
+    mask = counts >= density_threshold
+    keep = int(np.count_nonzero(mask))
+    min_keep = max(int(num_points * min_keep_ratio), 30)
+    if keep < min_keep:
+        logger.debug(
+            "Density trimming skipped (%d/%d points < min_keep=%d)",
+            keep,
+            num_points,
+            min_keep,
+        )
+        return pts
+    logger.debug(
+        "Density trimming kept %d/%d points before bbox fit (radius=%.3f, threshold=%d, lateral_axes=%s)",
+        keep,
+        num_points,
+        radius,
+        density_threshold,
+        lateral_axes,
+    )
+    return pts[mask]
+
+
 def _compute_oriented_bbox(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    centroid = points.mean(axis=0).astype(np.float32)
-    centered = points - centroid
-    if len(points) < 2:
+    centroid_source = _density_trim_points(points)
+    if len(centroid_source) == 0:
+        centroid_source = points
+    centroid = centroid_source.mean(axis=0).astype(np.float32)
+    centered = centroid_source - centroid
+    if len(centroid_source) < 2:
         axes = np.eye(3, dtype=np.float32)
     else:
         cov = np.cov(centered, rowvar=False)
@@ -304,28 +393,34 @@ def _compute_degree_map(connections: Sequence[WireConnection]) -> Dict[Path, int
 def _corner_indices_for_connection(
     conn: WireConnection,
     degree_map: Dict[Path, int],
-) -> Sequence[int]:
+) -> Sequence[Tuple[int, int]]:
     deg_source = degree_map.get(conn.source.path, 0)
     deg_target = degree_map.get(conn.target.path, 0)
     if deg_source > 1 and deg_target > 1:
-        return (0, 1, 2, 3)
-    direction = conn.target.centroid - conn.source.centroid
-    norm = np.linalg.norm(direction)
-    if norm < 1e-6:
-        return (0, 1)
-    direction /= norm
+        return tuple((i, i) for i in range(4))
     corners_a = conn.source.top_corners()
     corners_b = conn.target.top_corners()
-    centroid_a = conn.source.centroid
-    centroid_b = conn.target.centroid
-    scores = []
-    for idx in range(4):
-        vec_a = corners_a[idx] - centroid_a
-        vec_b = corners_b[idx] - centroid_b
-        score = float(np.dot(vec_a, direction) - np.dot(vec_b, direction))
-        scores.append(score)
-    best = np.argsort(scores)[-2:]
-    return tuple(int(i) for i in sorted(best))
+    if len(corners_a) != 4 or len(corners_b) != 4:
+        return ((0, 0),)
+    deltas = corners_a[:, None, :] - corners_b[None, :, :]
+    distances = np.linalg.norm(deltas, axis=2)
+    flat_indices = np.argsort(distances, axis=None)
+    used_a = set()
+    used_b = set()
+    pairs: List[Tuple[int, int]] = []
+    for flat_idx in flat_indices:
+        idx_a = int(flat_idx // distances.shape[1])
+        idx_b = int(flat_idx % distances.shape[1])
+        if idx_a in used_a or idx_b in used_b:
+            continue
+        pairs.append((idx_a, idx_b))
+        used_a.add(idx_a)
+        used_b.add(idx_b)
+        if len(pairs) >= 2:
+            break
+    if not pairs:
+        pairs.append((0, 0))
+    return tuple(pairs)
 
 
 def _sample_wire(
@@ -373,18 +468,19 @@ def _build_wire_cloud(
         sag_direction = _connection_sag_direction(conn)
         corners_a = conn.source.top_corners()
         corners_b = conn.target.top_corners()
-        corner_indices = _corner_indices_for_connection(conn, degree_map)
-        if len(corner_indices) < 4:
+        corner_pairs = _corner_indices_for_connection(conn, degree_map)
+        if len(corner_pairs) < 4:
             logger.debug(
-                "Connection %s -> %s uses %d corners (endpoint adjustment)",
+                "Connection %s -> %s uses %d corner pairs (endpoint adjustment): %s",
                 conn.source.path.name,
                 conn.target.path.name,
-                len(corner_indices),
+                len(corner_pairs),
+                corner_pairs,
             )
-        for corner_idx in corner_indices:
+        for corner_src, corner_tgt in corner_pairs:
             pts = _sample_wire(
-                corners_a[corner_idx],
-                corners_b[corner_idx],
+                corners_a[corner_src],
+                corners_b[corner_tgt],
                 samples_per_segment,
                 sag_fraction,
                 sag_direction,
@@ -394,7 +490,9 @@ def _build_wire_cloud(
             metadata.append(
                 {
                     "connection_id": conn_idx,
-                    "corner": corner_idx,
+                    "corner": corner_src,
+                    "corner_source": corner_src,
+                    "corner_target": corner_tgt,
                     "from_instance": conn.source.path.name,
                     "to_instance": conn.target.path.name,
                     "distance": conn.distance,

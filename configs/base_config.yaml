@@ -6,7 +6,7 @@ Weights:
 
 Model:
   chunk_size: 60
-  overlap: 30
+  overlap: 15
   loop_chunk_size: 20 # imgs of loop chunk = 2 * loop_chunk_size
   loop_enable: True
   useDBoW: False
@@ -69,6 +69,7 @@ Segmentation:
   morph_kernel: 0
   min_mask_area: 200
   max_points_per_label: 300000
+  downsample_factor: 2
   confidence_threshold: null
   no_merged_cloud: False
   clustering:

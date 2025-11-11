@@ -622,6 +622,7 @@ def aggregate_point_clouds(
     *,
     world_points: np.ndarray | None = None,
     frame_offset: int = 0,
+    frame_numbers: Sequence[int] | None = None,
     full_reconstruction_accumulator: List[np.ndarray] | None = None,
     full_reconstruction_colors: List[np.ndarray] | None = None,
     debug_log: bool = False,
@@ -648,11 +649,16 @@ def aggregate_point_clouds(
 
     label_to_points: Dict[str, List[np.ndarray]] = {}
     label_stats: Dict[str, Dict[str, float]] = {}
+    if frame_numbers is not None and len(frame_numbers) != num_frames:
+        raise ValueError("frame_numbers must have the same length as frame_paths")
 
     for frame_idx, frame_path in enumerate(frame_paths):
         frame_path = Path(frame_path)
         segments = segments_per_frame[frame_idx]
-        global_frame_idx = frame_offset + frame_idx
+        if frame_numbers is not None:
+            global_frame_idx = int(frame_numbers[frame_idx])
+        else:
+            global_frame_idx = frame_offset + frame_idx
         if use_precomputed_points:
             world_points_frame = world_points[frame_idx]
             if world_points_frame.ndim != 3 or world_points_frame.shape[-1] != 3:

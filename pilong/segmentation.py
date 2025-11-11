@@ -38,6 +38,7 @@ class SegmentationManager:
         self.segmentation_output_dir = os.path.join(output_dir, "segmentation")
         self.segmentation_models = None
         self.pointcloud_cfg = self.config.get("Model", {}).get("Pointcloud_Save", {})
+        self.downsample_factor = self._resolve_downsample_factor()
 
     def validate_config(self) -> None:
         if not self.enabled:
@@ -71,6 +72,12 @@ class SegmentationManager:
         total_frames = 0
         max_points_per_label = int(self.seg_cfg.get("max_points_per_label", 150_000))
         print("[Segmentation] Starting Grounded SAM 2 over aligned chunks...")
+        if self.downsample_factor > 1:
+            print(
+                "[Segmentation] Downsampling frames for segmentation by "
+                f"factor {self.downsample_factor} (processing every "
+                f"{self.downsample_factor}th frame)."
+            )
 
         for chunk_idx, (chunk_start, chunk_end) in enumerate(chunk_indices):
             chunk_file = Path(self.result_aligned_dir) / f"chunk_{chunk_idx}.npy"
@@ -90,12 +97,24 @@ class SegmentationManager:
             if unique_start >= chunk_len:
                 continue
 
-            frame_paths = [Path(p) for p in img_list[chunk_start + unique_start : chunk_end]]
-            if not frame_paths:
+            frame_paths_full = [Path(p) for p in img_list[chunk_start + unique_start : chunk_end]]
+            if not frame_paths_full:
                 continue
 
             points_slice = np.asarray(chunk_points[unique_start:])
             conf_slice = self._prepare_conf_map(chunk_conf[unique_start:])
+            frame_indices = list(range(len(frame_paths_full)))
+            if self.downsample_factor > 1:
+                frame_indices = frame_indices[:: self.downsample_factor]
+            if not frame_indices:
+                continue
+
+            frame_paths = [frame_paths_full[idx] for idx in frame_indices]
+            points_slice = points_slice[frame_indices]
+            if conf_slice is not None:
+                conf_slice = conf_slice[frame_indices]
+            frame_numbers = [chunk_start + unique_start + idx for idx in frame_indices]
+
             depth_conf_threshold = self._compute_segmentation_conf_threshold(conf_slice)
             target_h, target_w = chunk_images.shape[2], chunk_images.shape[3]
             segments_per_frame = []
@@ -127,6 +146,7 @@ class SegmentationManager:
                 max_points_per_label=max_points_per_label,
                 world_points=points_slice,
                 frame_offset=chunk_start + unique_start,
+                frame_numbers=frame_numbers,
             )
 
             for label, pts in label_points.items():
@@ -340,3 +360,13 @@ class SegmentationManager:
         up_vector = combined / norm
         print(f"[Segmentation] Using reconstruction up vector {up_vector.tolist()} for wire fitting.")
         return up_vector
+
+    def _resolve_downsample_factor(self) -> int:
+        value = self.seg_cfg.get("downsample_factor", 1)
+        try:
+            factor = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("[Segmentation] downsample_factor must be an integer >= 1.") from None
+        if factor < 1:
+            raise ValueError("[Segmentation] downsample_factor must be >= 1.")
+        return factor
