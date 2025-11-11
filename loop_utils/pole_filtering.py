@@ -12,6 +12,7 @@ from loop_utils.wire_fitting import (
     PoleInstance,
     _align_bbox_height_axis,
     _compute_oriented_bbox,
+    _density_trim_points,
     _normalize_vector,
 )
 
@@ -36,6 +37,8 @@ class PoleFilterConfig:
     min_profile_mad: float = 5e-4
     min_feature_mad: float = 5e-4
     summary_filename: str = "{label_slug}_filtering.json"
+    density_trim_enable: bool = True
+    density_trim_kwargs: Dict[str, object] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, mapping: Mapping[str, object]) -> "PoleFilterConfig":
@@ -57,6 +60,24 @@ class PoleFilterConfig:
                 )
         else:
             hb = cls.height_bounds
+        density_cfg = mapping.get("density_trim", cls.density_trim_enable)
+        density_enable = cls.density_trim_enable
+        density_kwargs: Dict[str, object] = {}
+        if isinstance(density_cfg, Mapping):
+            density_enable = bool(density_cfg.get("enable", cls.density_trim_enable))
+            allowed_keys = {
+                "min_points_for_filter",
+                "k_neighbors",
+                "low_density_quantile",
+                "radius_scale",
+                "min_radius",
+                "min_keep_ratio",
+            }
+            for key in allowed_keys:
+                if key in density_cfg:
+                    density_kwargs[key] = density_cfg[key]
+        else:
+            density_enable = bool(density_cfg)
         return cls(
             min_points=int(mapping.get("min_points", cls.min_points)),
             height_bounds=hb,
@@ -72,6 +93,8 @@ class PoleFilterConfig:
             min_profile_mad=float(mapping.get("min_profile_mad", cls.min_profile_mad)),
             min_feature_mad=float(mapping.get("min_feature_mad", cls.min_feature_mad)),
             summary_filename=str(mapping.get("summary_filename", cls.summary_filename)),
+            density_trim_enable=density_enable,
+            density_trim_kwargs=density_kwargs,
         )
 
 
@@ -191,6 +214,25 @@ def _load_profiles(
                 cfg.min_points,
             )
             continue
+        if cfg.density_trim_enable:
+            trimmed = _density_trim_points(points, **cfg.density_trim_kwargs)
+            if len(trimmed) < cfg.min_points:
+                logger.debug(
+                    "Density trim dropped %s below min_points (%d -> %d < %d)",
+                    ply_path.name,
+                    len(points),
+                    len(trimmed),
+                    cfg.min_points,
+                )
+                continue
+            if len(trimmed) != len(points):
+                logger.debug(
+                    "Density trim kept %d/%d pts for %s",
+                    len(trimmed),
+                    len(points),
+                    ply_path.name,
+                )
+            points = trimmed
         centroid, axes, local_min, local_max = _compute_oriented_bbox(points)
         extents = (local_max - local_min).astype(np.float32)
         height_axis = int(np.argmax(extents))

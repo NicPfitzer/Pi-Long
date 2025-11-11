@@ -92,6 +92,14 @@ Segmentation:
     feature_z_thresh: 3.0
     min_reference: 4
     reference_feature_z: 1.0
+    density_trim:
+      enable: True
+      min_points_for_filter: 120
+      k_neighbors: 10
+      low_density_quantile: 0.2
+      radius_scale: 1.15
+      min_radius: 0.04
+      min_keep_ratio: 0.35
   wire_fitting:
     enable: True
     label: "electric pole"

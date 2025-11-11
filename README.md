@@ -165,7 +165,7 @@ ffmpeg -i your_video.mp4 -vf "fps=5,scale=640:-1" ./extract_images/frame_%06d.pn
 
 ### ⚡ Electric Pole Wire Fitting
 
-Before the wires are generated, you can enable the dedicated pole filter (`loop_utils/pole_filtering.py`) via `Segmentation.pole_filter`. The filter aligns each instance into a canonical height/radius frame, learns the median point distribution from confident poles in the current scene, and drops clusters whose normalized profile or geometric features are out of distribution. Because reconstruction scale is often non-metric, the filter relies primarily on relative (MAD-based) scores; the optional `height_bounds` clamp can stay `null` unless you know the scale ahead of time. A JSON report (with per-instance scores and the learned prototype) is written next to the filtered instances for quick inspection.
+Before the wires are generated, you can enable the dedicated pole filter (`loop_utils/pole_filtering.py`) via `Segmentation.pole_filter`. The filter aligns each instance into a canonical height/radius frame, optionally trims low-density outliers with the same KD-tree heuristic used by wire fitting, learns the median point distribution from confident poles in the current scene, and drops clusters whose normalized profile or geometric features are out of distribution. Because reconstruction scale is often non-metric, the filter relies primarily on relative (MAD-based) scores; the optional `height_bounds` clamp can stay `null` unless you know the scale ahead of time. A JSON report (with per-instance scores and the learned prototype) is written next to the filtered instances for quick inspection.
 
 ```yaml
 Segmentation:
@@ -182,6 +182,14 @@ Segmentation:
     feature_z_thresh: 3.0
     min_reference: 4
     reference_feature_z: 1.0
+    density_trim:
+      enable: True
+      min_points_for_filter: 120
+      k_neighbors: 10
+      low_density_quantile: 0.2
+      radius_scale: 1.15
+      min_radius: 0.04
+      min_keep_ratio: 0.35
 ```
 
 After filtering, the optional wire fitting stage (see `loop_utils/wire_fitting.py`) links the surviving poles when `Segmentation.wire_fitting.enable` is `True`:
