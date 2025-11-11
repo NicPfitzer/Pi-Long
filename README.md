@@ -165,11 +165,29 @@ ffmpeg -i your_video.mp4 -vf "fps=5,scale=640:-1" ./extract_images/frame_%06d.pn
 
 ### ⚡ Electric Pole Wire Fitting
 
-The segmentation post-processing pipeline now includes an optional wire fitting stage (see `loop_utils/wire_fitting.py`). When `Segmentation.wire_fitting.enable` is `True`, the clustered `"electric pole"` instances are:
+Before the wires are generated, you can enable the dedicated pole filter (`loop_utils/pole_filtering.py`) via `Segmentation.pole_filter`. The filter aligns each instance into a canonical height/radius frame, learns the median point distribution from confident poles in the current scene, and drops clusters whose normalized profile or geometric features are out of distribution. Because reconstruction scale is often non-metric, the filter relies primarily on relative (MAD-based) scores; the optional `height_bounds` clamp can stay `null` unless you know the scale ahead of time. A JSON report (with per-instance scores and the learned prototype) is written next to the filtered instances for quick inspection.
 
-1. Filtered with robust statistics to drop boxes that are far outside the typical pole size distribution;
-2. Sorted along the dominant PCA axis so that nearest-neighbour links follow the physical ordering of poles;
-3. Connected with up to two neighbours per pole, producing at most two sagged poly-lines (one per matched top-box corner pair) for every valid connection to avoid duplicate spans when poles participate in multiple links.
+```yaml
+Segmentation:
+  pole_filter:
+    enable: True
+    label: "electric pole"
+    min_points: 150
+    height_bounds: null  # optional absolute clamp; keep null when reconstruction scale drifts
+    slenderness_min: 5.0
+    strict_slenderness: 6.0
+    profile_height_bins: 12
+    profile_radial_bins: 6
+    profile_z_thresh: 3.5
+    feature_z_thresh: 3.0
+    min_reference: 4
+    reference_feature_z: 1.0
+```
+
+After filtering, the optional wire fitting stage (see `loop_utils/wire_fitting.py`) links the surviving poles when `Segmentation.wire_fitting.enable` is `True`:
+
+1. Filtered poles are sorted along the dominant PCA axis so that nearest-neighbour links follow the physical ordering of poles;
+2. Connected with up to two neighbours per pole, producing at most two sagged poly-lines (one per matched top-box corner pair) for every valid connection to avoid duplicate spans when poles participate in multiple links.
 
 The wires are exported as `segmentation/instances/electric_pole/electric_pole_wires.ply` plus a companion JSON file that lists all connections, distances, and suggested next-step heuristics (MST-based linking, pose-aware ordering, heading gating). Tune the behaviour through `Segmentation.wire_fitting` in `configs/base_config.yaml`:
 

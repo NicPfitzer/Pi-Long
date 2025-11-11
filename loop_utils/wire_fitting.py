@@ -604,6 +604,7 @@ def fit_electric_pole_wires(
     wire_color: Sequence[int] = (90, 90, 90),
     bbox_color: Sequence[int] = (255, 85, 0),
     global_up: Optional[Sequence[float]] = None,
+    preloaded_poles: Optional[Sequence[PoleInstance]] = None,
 ) -> Optional[WireFittingResult]:
     logger.info(
         "Starting wire fitting for label='%s' (root=%s)",
@@ -620,12 +621,26 @@ def fit_electric_pole_wires(
         logger.warning("Label directory %s does not exist; skipping", label_dir)
         return None
 
-    poles = _load_poles(
-        label_dir,
-        min_points=min_points,
-        bbox_color=bbox_color,
-        preferred_up=normalized_up,
-    )
+    if preloaded_poles is not None:
+        poles = list(preloaded_poles)
+        if not poles:
+            logger.warning("No poles available after external filtering; skipping wire fit")
+            return None
+        logger.info(
+            "Using %d preloaded pole instances from filtering stage",
+            len(poles),
+        )
+        for pole in poles:
+            bbox_path = pole.path.with_name(f"{pole.path.stem}_bbox.ply")
+            if not bbox_path.exists():
+                _save_bbox_mesh(bbox_path, pole.all_corners(), bbox_color)
+    else:
+        poles = _load_poles(
+            label_dir,
+            min_points=min_points,
+            bbox_color=bbox_color,
+            preferred_up=normalized_up,
+        )
     if len(poles) < 2:
         logger.warning(
             "Need at least two poles to fit wires; got %d in %s",

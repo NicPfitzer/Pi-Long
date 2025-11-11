@@ -15,6 +15,7 @@ from grounded_sam2_vggt_pointcloud import (
     save_ply_ascii,
     subsample_points,
 )
+from loop_utils.pole_filtering import filter_electric_pole_instances
 from loop_utils.segmentation_postprocess import (
     aggregate_instance_cloud,
     run_segmentation_clustering,
@@ -281,22 +282,58 @@ class SegmentationManager:
         summary_path = save_instance_metadata(base_dir, cluster_summary)
         print(f"[Segmentation] Instance metadata saved to {summary_path}")
 
-        wire_cfg = self.seg_cfg.get("wire_fitting", {})
+        wire_cfg = self.seg_cfg.get("wire_fitting", {}) or {}
+        wire_label = wire_cfg.get("label", "electric pole")
+        pole_filter_cfg = self.seg_cfg.get("pole_filter", {}) or {}
+        need_up_vector = bool(wire_cfg.get("enable")) or bool(pole_filter_cfg.get("enable"))
+        reconstruction_up = self._load_reconstruction_up_vector() if need_up_vector else None
+
+        filter_label = (
+            pole_filter_cfg.get("label")
+            or wire_label
+        )
+        preloaded_poles = None
+        if pole_filter_cfg.get("enable"):
+            filter_cfg_payload = dict(pole_filter_cfg)
+            if "min_points" not in filter_cfg_payload and wire_cfg.get("min_points"):
+                filter_cfg_payload["min_points"] = wire_cfg["min_points"]
+            try:
+                filter_result = filter_electric_pole_instances(
+                    instance_root=instance_root,
+                    label=filter_label,
+                    config=filter_cfg_payload,
+                    global_up=reconstruction_up,
+                )
+            except Exception as exc:
+                print(f"[Segmentation] Pole filtering failed: {exc}")
+            else:
+                if filter_result:
+                    kept = len(filter_result.kept_profiles)
+                    total = filter_result.num_candidates
+                    print(
+                        "[Segmentation] Pole filtering kept "
+                        f"{kept}/{total} instances. Summary: {filter_result.summary_path}"
+                    )
+                    if filter_label.strip().lower() == wire_label.strip().lower():
+                        preloaded_poles = filter_result.kept_instances
+                else:
+                    print("[Segmentation] Pole filtering produced no candidates.")
+
         wire_added = False
         if wire_cfg.get("enable", False):
             spacing_cfg = wire_cfg.get("spacing_factor", 2.5)
             spacing_factor = float(spacing_cfg) if spacing_cfg is not None else None
-            reconstruction_up = self._load_reconstruction_up_vector()
             try:
                 wire_result = fit_electric_pole_wires(
                     instance_root=instance_root,
-                    label_name=wire_cfg.get("label", "electric pole"),
+                    label_name=wire_label,
                     min_points=int(wire_cfg.get("min_points", 150)),
                     outlier_z_thresh=float(wire_cfg.get("outlier_z_thresh", 2.5)),
                     samples_per_segment=int(wire_cfg.get("samples_per_segment", 32)),
                     sag_fraction=float(wire_cfg.get("sag_fraction", 0.025)),
                     spacing_factor=spacing_factor,
                     global_up=reconstruction_up,
+                    preloaded_poles=preloaded_poles,
                 )
             except Exception as exc:
                 print(f"[Segmentation] Wire fitting failed: {exc}")

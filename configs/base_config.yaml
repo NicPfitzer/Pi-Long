@@ -79,6 +79,19 @@ Segmentation:
     min_cluster_points: 300
     voxel_size: 0.01
     max_instances_per_label: null
+  pole_filter:
+    enable: True
+    label: "electric pole"
+    min_points: 150
+    height_bounds: null  # Optional [min, max] clamp. Leave null when scene scale is unknown.
+    slenderness_min: 5.0
+    strict_slenderness: 6.0
+    profile_height_bins: 12
+    profile_radial_bins: 6
+    profile_z_thresh: 3.5
+    feature_z_thresh: 3.0
+    min_reference: 4
+    reference_feature_z: 1.0
   wire_fitting:
     enable: True
     label: "electric pole"
