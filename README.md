@@ -169,7 +169,7 @@ The segmentation post-processing pipeline now includes an optional wire fitting 
 
 1. Filtered with robust statistics to drop boxes that are far outside the typical pole size distribution;
 2. Sorted along the dominant PCA axis so that nearest-neighbour links follow the physical ordering of poles;
-3. Connected with up to two neighbours per pole, producing four sagged poly-lines (one per top-box corner) for every valid connection.
+3. Connected with up to two neighbours per pole, producing at most two sagged poly-lines (one per matched top-box corner pair) for every valid connection to avoid duplicate spans when poles participate in multiple links.
 
 The wires are exported as `segmentation/instances/electric_pole/electric_pole_wires.ply` plus a companion JSON file that lists all connections, distances, and suggested next-step heuristics (MST-based linking, pose-aware ordering, heading gating). Tune the behaviour through `Segmentation.wire_fitting` in `configs/base_config.yaml`:
 

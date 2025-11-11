@@ -437,7 +437,17 @@ def _corner_indices_for_connection(
     corners_b = conn.target.top_corners()
     if len(corners_a) != 4 or len(corners_b) != 4:
         return ((0, 0),)
-    max_pairs = 4 if (deg_source > 1 and deg_target > 1) else 2
+    # Limit high-degree pole pairs to a single pair of span wires to avoid duplicates.
+    max_pairs = 2
+    if deg_source > 1 and deg_target > 1:
+        logger.debug(
+            "Clamping %s -> %s to %d corner pairs (deg_source=%d, deg_target=%d)",
+            conn.source.path.name,
+            conn.target.path.name,
+            max_pairs,
+            deg_source,
+            deg_target,
+        )
     return _match_corners_by_distance(corners_a, corners_b, max_pairs=max_pairs)
 
 
@@ -489,12 +499,14 @@ def _build_wire_cloud(
         corners_a = conn.source.top_corners()
         corners_b = conn.target.top_corners()
         corner_pairs = _corner_indices_for_connection(conn, degree_map)
-        if len(corner_pairs) < 4:
+        expected_pairs = min(2, len(corners_a), len(corners_b))
+        if len(corner_pairs) < expected_pairs:
             logger.debug(
-                "Connection %s -> %s uses %d corner pairs (endpoint adjustment): %s",
+                "Connection %s -> %s limited to %d/%d corner pairs: %s",
                 conn.source.path.name,
                 conn.target.path.name,
                 len(corner_pairs),
+                expected_pairs,
                 corner_pairs,
             )
         for corner_src, corner_tgt in corner_pairs:
