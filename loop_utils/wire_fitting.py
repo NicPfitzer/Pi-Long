@@ -24,7 +24,7 @@ class PoleInstance:
     local_max: np.ndarray
     extents: np.ndarray
     height_axis: int
-    up_direction: Optional[np.ndarray] = None
+    up_direction: np.ndarray
 
     @property
     def height(self) -> float:
@@ -198,39 +198,6 @@ def _save_bbox_mesh(path: Path, corners: np.ndarray, color: Sequence[int]) -> No
     colors = np.repeat(base_color, len(corners), axis=0)
     save_ply_ascii(path, corners, colors)
 
-
-def _resolve_height_axis(
-    axes: np.ndarray,
-    extents: np.ndarray,
-    preferred_up: Optional[np.ndarray],
-) -> Tuple[int, np.ndarray]:
-    axis_vectors = np.asarray(axes, dtype=np.float32).T
-    if preferred_up is not None:
-        alignments = axis_vectors @ preferred_up
-        best_idx = int(np.argmax(np.abs(alignments)))
-        up_dir = axis_vectors[best_idx]
-        if alignments[best_idx] < 0:
-            up_dir = -up_dir
-        norm = np.linalg.norm(up_dir)
-        if norm >= 1e-6:
-            return best_idx, up_dir / norm
-    fallback_idx = int(np.argmax(extents))
-    up_dir = axis_vectors[fallback_idx]
-    reference = preferred_up
-    if reference is None:
-        reference = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-    if np.dot(up_dir, reference) < 0:
-        up_dir = -up_dir
-    norm = np.linalg.norm(up_dir)
-    if norm < 1e-6:
-        up_dir = reference
-        norm = np.linalg.norm(up_dir)
-    if norm < 1e-6:
-        up_dir = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-        norm = 1.0
-    return fallback_idx, up_dir / norm
-
-
 def _load_poles(
     instance_dir: Path,
     min_points: int,
@@ -254,7 +221,18 @@ def _load_poles(
             continue
         centroid, axes, local_min, local_max = _compute_oriented_bbox(points)
         extents = (local_max - local_min).astype(np.float32)
-        height_axis, up_dir = _resolve_height_axis(axes, extents, preferred_up)
+        height_axis = int(np.argmax(extents))
+        if preferred_up is not None:
+            up_dir = preferred_up.copy()
+        else:
+            up_dir = axes[:, height_axis].astype(np.float32)
+            if up_dir[2] < 0:
+                up_dir = -up_dir
+            norm = np.linalg.norm(up_dir)
+            if norm < 1e-6:
+                up_dir = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+            else:
+                up_dir /= norm
         pole = PoleInstance(
             path=ply_path,
             centroid=centroid,
@@ -377,15 +355,6 @@ def _connect_poles(
 
 
 def _pole_up_direction(pole: PoleInstance) -> np.ndarray:
-    if pole.up_direction is None:
-        axis = pole.axes[:, pole.height_axis].astype(np.float32)
-        if axis[2] < 0:
-            axis = -axis
-        norm = np.linalg.norm(axis)
-        if norm < 1e-6:
-            pole.up_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-        else:
-            pole.up_direction = axis / norm
     return pole.up_direction
 
 
