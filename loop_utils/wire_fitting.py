@@ -611,6 +611,7 @@ def fit_electric_pole_wires(
         instance_root,
     )
     normalized_up = _normalize_vector(global_up)
+    print(normalized_up)
     if normalized_up is not None:
         logger.info("Using provided global up vector %s", np.array2string(normalized_up, precision=3))
     label_slug = label_name.replace(" ", "_")
