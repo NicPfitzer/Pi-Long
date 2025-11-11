@@ -56,15 +56,15 @@ class PoleInstance:
                     face_candidates.append(self._local_to_world(np.stack(face, axis=0)))
             if face_candidates:
                 face_scores = [float(np.mean(face @ up_dir)) for face in face_candidates]
-                if max(face_scores) < 0:
-                    up_dir = -up_dir
-                    face_scores = [float(np.mean(face @ up_dir)) for face in face_candidates]
                 best_idx = int(np.argmax(face_scores))
                 corners = face_candidates[best_idx]
             else:
                 corners = all_corners
         projections = corners @ up_dir
         order = np.argsort(projections)[::-1]
+        print(f"Corner Projections: {projections}")
+        print(f"Corner Order: {order}")
+        print(f"Corners: {corners}")
         keep = min(4, len(order))
         return corners[order[:keep]]
 
