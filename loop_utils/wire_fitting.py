@@ -39,26 +39,14 @@ class PoleInstance:
         return self.centroid[None, :] + local_pts @ self.axes.T
 
     def top_corners(self) -> np.ndarray:
-        lateral_axes = [idx for idx in range(3) if idx != self.height_axis]
-        axis_vec = self.axes[:, self.height_axis].astype(np.float32)
         up_dir = _pole_up_direction(self)
-        alignment = float(np.dot(axis_vec, up_dir))
-        top_value = (
-            self.local_max[self.height_axis]
-            if alignment >= 0.0
-            else self.local_min[self.height_axis]
-        )
-        local_corners: List[np.ndarray] = []
-        for bit_combo in range(4):
-            corner = np.empty(3, dtype=np.float32)
-            corner[self.height_axis] = top_value
-            for axis_offset, axis_idx in enumerate(lateral_axes):
-                use_max = (bit_combo >> axis_offset) & 1
-                corner[axis_idx] = (
-                    self.local_max[axis_idx] if use_max else self.local_min[axis_idx]
-                )
-            local_corners.append(corner)
-        return self._local_to_world(np.stack(local_corners, axis=0))
+        corners = self.all_corners()
+        projections = corners @ up_dir
+        if len(corners) <= 4:
+            return corners
+        top_indices = np.argsort(projections)[-4:]
+        ordered = top_indices[np.argsort(projections[top_indices])[::-1]]
+        return corners[ordered]
 
     def all_corners(self) -> np.ndarray:
         local_corners = []
