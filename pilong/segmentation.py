@@ -263,10 +263,11 @@ class SegmentationManager:
         clustering_cfg = self.seg_cfg.get("clustering", {})
         if not clustering_cfg.get("enable"):
             return
+        instance_root = base_dir / "instances"
         try:
             cluster_summary = run_segmentation_clustering(
                 per_label_dir=per_label_dir,
-                instance_root=base_dir / "instances",
+                instance_root=instance_root,
                 cfg_mapping=clustering_cfg,
             )
         except ImportError as exc:
@@ -280,42 +281,44 @@ class SegmentationManager:
         summary_path = save_instance_metadata(base_dir, cluster_summary)
         print(f"[Segmentation] Instance metadata saved to {summary_path}")
 
-        aggregated = aggregate_instance_cloud(base_dir / "instances")
+        wire_cfg = self.seg_cfg.get("wire_fitting", {})
+        wire_added = False
+        if wire_cfg.get("enable", False):
+            spacing_cfg = wire_cfg.get("spacing_factor", 2.5)
+            spacing_factor = float(spacing_cfg) if spacing_cfg is not None else None
+            reconstruction_up = self._load_reconstruction_up_vector()
+            try:
+                wire_result = fit_electric_pole_wires(
+                    instance_root=instance_root,
+                    label_name=wire_cfg.get("label", "electric pole"),
+                    min_points=int(wire_cfg.get("min_points", 150)),
+                    outlier_z_thresh=float(wire_cfg.get("outlier_z_thresh", 2.5)),
+                    samples_per_segment=int(wire_cfg.get("samples_per_segment", 32)),
+                    sag_fraction=float(wire_cfg.get("sag_fraction", 0.025)),
+                    spacing_factor=spacing_factor,
+                    global_up=reconstruction_up,
+                )
+            except Exception as exc:
+                print(f"[Segmentation] Wire fitting failed: {exc}")
+            else:
+                if wire_result:
+                    print(
+                        "[Segmentation] Electric pole wires saved to "
+                        f"{wire_result.wire_path} ({wire_result.num_connections} connections)."
+                    )
+                    print(f"[Segmentation] Wire metadata saved to {wire_result.metadata_path}.")
+                    wire_added = True
+                else:
+                    print("[Segmentation] Wire fitting skipped (insufficient electric pole instances).")
+
+        aggregated = aggregate_instance_cloud(instance_root)
         if aggregated is not None:
             inst_points, inst_colors = aggregated
             save_ply_ascii(base_dir / "merged_point_cloud.ply", inst_points, inst_colors)
-            print("[Segmentation] Merged point cloud updated with clustered instances.")
+            suffix = " (wires included)" if wire_added else ""
+            print(f"[Segmentation] Merged point cloud updated with clustered instances{suffix}.")
         else:
             print("[Segmentation] Clustering produced metadata but no points to merge.")
-
-        wire_cfg = self.seg_cfg.get("wire_fitting", {})
-        if not wire_cfg.get("enable", False):
-            return
-        spacing_cfg = wire_cfg.get("spacing_factor", 2.5)
-        spacing_factor = float(spacing_cfg) if spacing_cfg is not None else None
-        reconstruction_up = self._load_reconstruction_up_vector()
-        try:
-            wire_result = fit_electric_pole_wires(
-                instance_root=base_dir / "instances",
-                label_name=wire_cfg.get("label", "electric pole"),
-                min_points=int(wire_cfg.get("min_points", 150)),
-                outlier_z_thresh=float(wire_cfg.get("outlier_z_thresh", 2.5)),
-                samples_per_segment=int(wire_cfg.get("samples_per_segment", 32)),
-                sag_fraction=float(wire_cfg.get("sag_fraction", 0.025)),
-                spacing_factor=spacing_factor,
-                global_up=reconstruction_up,
-            )
-        except Exception as exc:
-            print(f"[Segmentation] Wire fitting failed: {exc}")
-        else:
-            if wire_result:
-                print(
-                    "[Segmentation] Electric pole wires saved to "
-                    f"{wire_result.wire_path} ({wire_result.num_connections} connections)."
-                )
-                print(f"[Segmentation] Wire metadata saved to {wire_result.metadata_path}.")
-            else:
-                print("[Segmentation] Wire fitting skipped (insufficient electric pole instances).")
 
     def _release_models(self) -> None:
         self.segmentation_models = None

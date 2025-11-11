@@ -69,7 +69,7 @@ Segmentation:
   morph_kernel: 0
   min_mask_area: 200
   max_points_per_label: 300000
-  downsample_factor: 2
+  downsample_factor: 4
   confidence_threshold: null
   no_merged_cloud: False
   clustering:
