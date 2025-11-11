@@ -426,7 +426,7 @@ def _connection_sag_direction(
         up = np.asarray(world_up, dtype=np.float32).reshape(3)
         norm = np.linalg.norm(up)
         if norm >= 1e-6:
-            return -up / norm
+            return up / norm
     up_a = _pole_up_direction(conn.source)
     up_b = _pole_up_direction(conn.target)
     up = up_a + up_b
@@ -437,7 +437,7 @@ def _connection_sag_direction(
     if norm < 1e-6:
         up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
         norm = 1.0
-    return -up / norm
+    return up / norm
 
 
 def _compute_degree_map(connections: Sequence[WireConnection]) -> Dict[Path, int]:
