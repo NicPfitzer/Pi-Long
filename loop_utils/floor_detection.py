@@ -193,9 +193,50 @@ def estimate_floor_up_direction(
         idx = rng.choice(len(inliers), size=cfg.max_refine_points, replace=False)
         inliers = inliers[idx]
 
+    plane_origin = inliers.mean(axis=0)
+
+    def _signed_stats(normal: np.ndarray) -> Tuple[np.ndarray, float, float]:
+        offset = float(np.dot(normal, plane_origin))
+        signed_vals = pts @ normal - offset
+        if signed_vals.size == 0:
+            return signed_vals, 0.0, 0.0
+        pos_extent = float(np.max(signed_vals))
+        neg_extent = float(-np.min(signed_vals))
+        return signed_vals, max(pos_extent, 0.0), max(neg_extent, 0.0)
+
     refined = _refine_normal(inliers)
-    if target_dir is not None and np.dot(refined, target_dir) < 0:
-        refined = -refined
+    signed, pos_extent, neg_extent = _signed_stats(refined)
+    extent_sum = pos_extent + neg_extent
+    balance_eps = 0.05
+    orientation_source = "span_anchor"
+
+    if extent_sum > 1e-6:
+        # Prefer the orientation where the farthest point away from the floor lies above it.
+        if pos_extent + extent_sum * balance_eps < neg_extent:
+            refined = -refined
+            signed, pos_extent, neg_extent = _signed_stats(refined)
+        elif abs(pos_extent - neg_extent) <= extent_sum * balance_eps:
+            orientation_source = "ambiguous"
+    else:
+        orientation_source = "ambiguous"
+
+    if orientation_source == "ambiguous" and target_dir is not None:
+        orientation_source = "target_dir"
+        if np.dot(refined, target_dir) < 0:
+            refined = -refined
+            signed, pos_extent, neg_extent = _signed_stats(refined)
+
+    positive_fraction = (
+        float(np.count_nonzero(signed >= 0) / signed.size) if signed.size > 0 else 0.0
+    )
+    result_meta.update(
+        {
+            "positive_extent": float(pos_extent),
+            "negative_extent": float(neg_extent),
+            "positive_fraction": positive_fraction,
+            "orientation_source": orientation_source,
+        }
+    )
 
     result_meta["success"] = True
     return refined.astype(np.float32), result_meta
