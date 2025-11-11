@@ -40,13 +40,30 @@ class PoleInstance:
 
     def top_corners(self) -> np.ndarray:
         up_dir = _pole_up_direction(self)
-        corners = self.all_corners()
+        all_corners = self.all_corners()
+        if len(all_corners) <= 4:
+            corners = all_corners
+        else:
+            local_faces = {True: [], False: []}
+            for combo in itertools.product((0, 1), repeat=3):
+                selector = np.array(combo, dtype=bool)
+                local_corner = np.where(selector, self.local_max, self.local_min)
+                local_faces[bool(combo[self.height_axis])].append(local_corner)
+            face_candidates = []
+            for key in (True, False):
+                face = local_faces[key]
+                if face:
+                    face_candidates.append(self._local_to_world(np.stack(face, axis=0)))
+            if face_candidates:
+                face_scores = [float(np.mean(face @ up_dir)) for face in face_candidates]
+                best_idx = int(np.argmax(face_scores))
+                corners = face_candidates[best_idx]
+            else:
+                corners = all_corners
         projections = corners @ up_dir
-        if len(corners) <= 4:
-            return corners
-        top_indices = np.argsort(projections)[-4:]
-        ordered = top_indices[np.argsort(projections[top_indices])[::-1]]
-        return corners[ordered]
+        order = np.argsort(projections)[::-1]
+        keep = min(4, len(order))
+        return corners[order[:keep]]
 
     def all_corners(self) -> np.ndarray:
         local_corners = []
