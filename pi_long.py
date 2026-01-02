@@ -19,7 +19,7 @@ from LoopModels.LoopModel import LoopDetector
 from LoopModelDBoW.retrieval.retrieval_dbow import RetrievalDBOW
 # from loop_utils.visual_util import segment_sky, download_file_from_url
 
-from pi3.models.pi3 import Pi3
+from pi3.models.pi3x import Pi3X
 from pi3.utils.basic import load_images_as_tensor, load_images_as_tensor_pi_long
 from pi3.utils.geometry import depth_edge
 
@@ -99,8 +99,10 @@ class Pi_Long:
 
         print('Loading model...')
 
-        self.model = Pi3().to(self.device).eval()
-        _URL = self.config['Weights']['Pi3']
+        self.model = Pi3X().to(self.device).eval()
+        _URL = self.config['Weights'].get('Pi3X') or self.config['Weights'].get('Pi3')
+        if _URL is None:
+            raise KeyError("Weights.Pi3X (or Pi3) is not set in the config.")
         from safetensors.torch import load_file
         weight = load_file(_URL)
         self.model.load_state_dict(weight, strict=False)
