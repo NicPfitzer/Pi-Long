@@ -5,38 +5,30 @@ import torch.nn.functional as F
 def se3_inverse(T):
     """
     Computes the inverse of a batch of SE(3) matrices.
-    T: Tensor of shape (B, 4, 4)
     """
-    if len(T.shape) == 2:
-        T = T[None]
-        unseq_flag = True
-    else:
-        unseq_flag = False
 
     if torch.is_tensor(T):
-        R = T[:, :3, :3]
-        t = T[:, :3, 3].unsqueeze(-1)
+        R = T[..., :3, :3]
+        t = T[..., :3, 3].unsqueeze(-1)
         R_inv = R.transpose(-2, -1)
         t_inv = -torch.matmul(R_inv, t)
         T_inv = torch.cat([
             torch.cat([R_inv, t_inv], dim=-1),
-            torch.tensor([0, 0, 0, 1], device=T.device, dtype=T.dtype).repeat(T.shape[0], 1, 1)
-        ], dim=1)
+            torch.tensor([0, 0, 0, 1], device=T.device, dtype=T.dtype).repeat(*T.shape[:-2], 1, 1)
+        ], dim=-2)
     else:
-        R = T[:, :3, :3]
-        t = T[:, :3, 3, np.newaxis]
+        R = T[..., :3, :3]
+        t = T[..., :3, 3, np.newaxis]
 
         R_inv = np.swapaxes(R, -2, -1)
         t_inv = -R_inv @ t
 
-        bottom_row = np.zeros((T.shape[0], 1, 4), dtype=T.dtype)
-        bottom_row[:, :, 3] = 1
+        bottom_row = np.zeros((*T.shape[:-2], 1, 4), dtype=T.dtype)
+        bottom_row[..., :, 3] = 1
 
         top_part = np.concatenate([R_inv, t_inv], axis=-1)
-        T_inv = np.concatenate([top_part, bottom_row], axis=1)
+        T_inv = np.concatenate([top_part, bottom_row], axis=-2)
 
-    if unseq_flag:
-        T_inv = T_inv[0]
     return T_inv
 
 def get_pixel(H, W):
