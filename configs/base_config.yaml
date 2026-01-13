@@ -12,6 +12,7 @@ Model:
   useDBoW: False
   delete_temp_files: True
   align_method: 'numba' # 'numba' or 'numpy', use 'numba' would be faster
+  pi3_variant: "pi3" # "pi3" or "pi3x"
 
   IRLS:
     delta: 0.1

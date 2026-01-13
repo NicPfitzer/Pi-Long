@@ -902,4 +902,3 @@ def weighted_align_point_maps(point_map1, conf1, point_map2, conf2, conf_thresho
     print(f'Mean error: {mean_error}')
 
     return s, R, t
-
